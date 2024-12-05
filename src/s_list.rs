@@ -160,14 +160,13 @@ impl<T> Iterator for Iter<'_, T> {
         let node = loop {
             match self.curr.next.read() {
                 Some(next) => {
-                    let node = self.curr.clone();
-                    if Arc::ptr_eq(&node, self.head) {
+                    if Arc::ptr_eq(&next, self.head) {
                         // skip the head node which is being setup
                         core::hint::spin_loop();
                         continue;
                     }
-                    self.curr = next;
-                    break node;
+                    self.curr = next.clone();
+                    break next;
                 }
                 None => {
                     if self.tail.arc_eq(&self.curr) {
@@ -212,4 +211,19 @@ mod tests {
 		assert_eq!(*list.pop_front().unwrap(), 2);
 		assert!(list.is_empty());
 	}
+
+	#[test]
+	fn test_iter() {
+		let mut list = super::LinkedList::new();
+		list.push_back(1);
+		list.push_back(2);
+		list.push_back(3);
+
+		let mut iter = list.iter();
+		assert_eq!(*iter.next().unwrap(), 1);
+		assert_eq!(*iter.next().unwrap(), 2);
+		assert_eq!(*iter.next().unwrap(), 3);
+		assert!(iter.next().is_none());
+	}
+
 }
