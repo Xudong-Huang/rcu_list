@@ -185,45 +185,44 @@ impl<T> Iterator for Iter<'_, T> {
 
 #[cfg(test)]
 mod tests {
-	#[test]
-	fn test_list() {
-		let mut list = super::LinkedList::new();
-		assert!(list.is_empty());
+    #[test]
+    fn test_list() {
+        let mut list = super::LinkedList::new();
+        assert!(list.is_empty());
 
-		let a = list.push_back(1);
-		assert!(!list.is_empty());
-		assert_eq!(*list.front().unwrap(), 1);
-		assert_eq!(*list.back().unwrap(), 1);
-		assert_eq!(*a, 1);
+        let a = list.push_back(1);
+        assert!(!list.is_empty());
+        assert_eq!(*list.front().unwrap(), 1);
+        assert_eq!(*list.back().unwrap(), 1);
+        assert_eq!(*a, 1);
 
-		let b = list.push_back(2);
-		assert_eq!(*list.front().unwrap(), 1);
-		assert_eq!(*list.back().unwrap(), 2);
-		assert_eq!(*b, 2);
+        let b = list.push_back(2);
+        assert_eq!(*list.front().unwrap(), 1);
+        assert_eq!(*list.back().unwrap(), 2);
+        assert_eq!(*b, 2);
 
-		let c = list.push_front(0);
-		assert_eq!(*list.front().unwrap(), 0);
-		assert_eq!(*list.back().unwrap(), 2);
-		assert_eq!(*c, 0);
+        let c = list.push_front(0);
+        assert_eq!(*list.front().unwrap(), 0);
+        assert_eq!(*list.back().unwrap(), 2);
+        assert_eq!(*c, 0);
 
-		assert_eq!(*list.pop_front().unwrap(), 0);
-		assert_eq!(*list.pop_front().unwrap(), 1);
-		assert_eq!(*list.pop_front().unwrap(), 2);
-		assert!(list.is_empty());
-	}
+        assert_eq!(*list.pop_front().unwrap(), 0);
+        assert_eq!(*list.pop_front().unwrap(), 1);
+        assert_eq!(*list.pop_front().unwrap(), 2);
+        assert!(list.is_empty());
+    }
 
-	#[test]
-	fn test_iter() {
-		let mut list = super::LinkedList::new();
-		list.push_back(1);
-		list.push_back(2);
-		list.push_back(3);
+    #[test]
+    fn test_iter() {
+        let mut list = super::LinkedList::new();
+        list.push_back(1);
+        list.push_back(2);
+        list.push_back(3);
 
-		let mut iter = list.iter();
-		assert_eq!(*iter.next().unwrap(), 1);
-		assert_eq!(*iter.next().unwrap(), 2);
-		assert_eq!(*iter.next().unwrap(), 3);
-		assert!(iter.next().is_none());
-	}
-
+        let mut iter = list.iter();
+        assert_eq!(*iter.next().unwrap(), 1);
+        assert_eq!(*iter.next().unwrap(), 2);
+        assert_eq!(*iter.next().unwrap(), 3);
+        assert!(iter.next().is_none());
+    }
 }
