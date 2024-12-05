@@ -9,24 +9,130 @@ pub struct Node<T> {
     data: Option<T>,
 }
 
-pub struct EntryRef<T>(Arc<Node<T>>);
+#[derive(Clone)]
+pub struct Entry<'a, T> {
+    list: &'a LinkedList<T>,
+    node: Arc<Node<T>>,
+}
 
-impl<T> Deref for EntryRef<T> {
+impl<T> Deref for Entry<'_, T> {
     type Target = T;
     fn deref(&self) -> &T {
-        self.0.data.as_ref().unwrap()
+        self.node.data.as_ref().unwrap()
     }
 }
 
-impl<T: fmt::Debug> fmt::Debug for EntryRef<T> {
+impl<T: fmt::Debug> fmt::Debug for Entry<'_, T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "EntryRef({:?})", self.0.data.as_ref().unwrap())
+        write!(f, "Entry({:?})", self.node.data.as_ref().unwrap())
     }
 }
 
-impl<T: PartialEq> PartialEq for EntryRef<T> {
+impl<T: PartialEq> PartialEq for Entry<'_, T> {
     fn eq(&self, other: &Self) -> bool {
-        self.0.data == other.0.data
+        self.node.data == other.node.data
+    }
+}
+
+impl<T> AsRef<T> for Entry<'_, T> {
+    fn as_ref(&self) -> &T {
+        self.deref()
+    }
+}
+
+impl<T> Entry<'_, T> {
+    fn new_node(&self, node: Arc<Node<T>>) -> Self {
+        Self {
+            list: self.list,
+            node,
+        }
+    }
+
+    /// Inserts an element after the current element and returns an Entry that can be used to manipulate the element.
+    pub fn insert_after(&self, elt: T) -> Entry<T> {
+        self.new_node(EntryImpl::new(self.list, &self.node).insert_after(elt))
+    }
+
+    /// Inserts an element after the current element and returns an Entry that can be used to manipulate the element.
+    pub fn remove_after(&self) -> Option<Entry<T>> {
+        EntryImpl::new(self.list, &self.node)
+            .remove_after()
+            .map(|n| self.new_node(n))
+    }
+
+    /// Returns an iterator over the elements of the list from the current element(not include).
+    pub fn iter(&self) -> Iter<T> {
+        Iter {
+            list: self.list,
+            curr: self.node.clone(),
+        }
+    }
+}
+
+struct EntryImpl<'a, 'b, T> {
+    list: &'a LinkedList<T>,
+    node: &'b Arc<Node<T>>,
+}
+
+impl<'a, 'b, T> EntryImpl<'a, 'b, T> {
+    fn new(list: &'a LinkedList<T>, node: &'b Arc<Node<T>>) -> Self {
+        Self { list, node }
+    }
+
+    fn insert_after(&self, elt: T) -> Arc<Node<T>> {
+        let new_node = Arc::new(Node {
+            // We first set the next to the head, this create a
+            // circular LinkedList. After the new node is setup,
+            // we will update this next to the old node. This
+            // prevent iter to a false tail node which next is None
+            // and the head.next swap would not be unexpected none
+            next: RcuCell::from(self.list.head.clone()),
+            data: Some(elt),
+        });
+
+        // swap the next
+        match self.node.next.write(new_node.clone()) {
+            Some(old_node) => {
+                // setup the next node
+                new_node.next.write(old_node);
+            }
+            None => {
+                // update the tail to the new node
+                self.list.tail.write(new_node.clone());
+                self.list.tail.update(|tail| {
+                    let tail = tail.unwrap(); // tail is never none
+                    if Arc::ptr_eq(&tail, &self.node) {
+                        Some(new_node.clone())
+                    } else {
+                        Some(tail)
+                    }
+                });
+            }
+        }
+
+        new_node
+    }
+
+    fn remove_after(&self) -> Option<Arc<Node<T>>> {
+        let next = &self.node.next;
+        next.update(|next| {
+            next.and_then(|next| {
+                match next.next.read() {
+                    Some(next_next) => Some(next_next),
+                    None => {
+                        self.list.tail.update(|tail| {
+                            let tail = tail.unwrap(); // tail is never none
+                            if Arc::ptr_eq(&tail, &next) {
+                                Some(self.node.clone())
+                            } else {
+                                Some(tail)
+                            }
+                        });
+                        None
+                    }
+                }
+            })
+        })
     }
 }
 
@@ -54,19 +160,28 @@ impl<T> LinkedList<T> {
         Self { head, tail }
     }
 
+    fn new_entry(&self, node: Arc<Node<T>>) -> Entry<T> {
+        Entry { list: self, node }
+    }
+
+    /// Returns true if the list is empty.
     pub fn is_empty(&self) -> bool {
         self.tail.arc_eq(&self.head)
     }
 
-    pub fn front(&self) -> Option<EntryRef<T>> {
-        self.head.next.read().map(EntryRef)
+    /// Returns the first element of the list, or None if the list is empty.
+    pub fn front(&self) -> Option<Entry<T>> {
+        self.head.next.read().map(|n| self.new_entry(n))
     }
 
-    pub fn back(&self) -> Option<EntryRef<T>> {
-        self.tail.read().map(EntryRef)
+    /// Returns the last element of the list, or None if the list is empty.
+    pub fn back(&self) -> Option<Entry<T>> {
+        self.tail.read().map(|n| self.new_entry(n))
     }
 
-    pub fn push_back(&mut self, elt: T) -> EntryRef<T> {
+    /// Appends an element to the back of the list
+    /// and returns an Entry that can be used to manipulate the element.
+    pub fn push_back(&self, elt: T) -> Entry<T> {
         let new_node = Arc::new(Node {
             next: RcuCell::none(),
             data: Some(elt),
@@ -85,59 +200,26 @@ impl<T> LinkedList<T> {
             }
         }
 
-        EntryRef(new_node)
+        self.new_entry(new_node)
     }
 
-    pub fn push_front(&mut self, elt: T) -> EntryRef<T> {
-        let new_node = Arc::new(Node {
-            // We first set the next to the head, this create a
-            // circular LinkedList. After the new node is setup,
-            // we will update this next to the old node. This
-            // prevent iter to a false tail node which next is None
-            next: RcuCell::from(self.head.clone()),
-            data: Some(elt),
-        });
-        // swap the head.next
-        match self.head.next.write(new_node.clone()) {
-            Some(old_next) => {
-                new_node.next.write(old_next);
-            }
-            None => {
-                // update the tail to the new node
-                self.tail.write(new_node.clone());
-            }
-        }
-
-        EntryRef(new_node)
+    /// Insert an element to the front of the list.
+    /// and returns an Entry that can be used to manipulate the element.
+    pub fn push_front(&self, elt: T) -> Entry<T> {
+        self.new_entry(EntryImpl::new(self, &self.head).insert_after(elt))
     }
 
-    pub fn pop_front(&mut self) -> Option<EntryRef<T>> {
-        let old_node = self.head.next.update(|next| {
-            match next {
-                Some(next) => match next.next.read() {
-                    Some(next_next) => Some(next_next),
-                    None => {
-                        self.tail.update(|tail| {
-                            let tail = tail.unwrap(); // tail is never none
-                            if Arc::ptr_eq(&tail, &next) {
-                                Some(self.head.clone())
-                            } else {
-                                Some(tail)
-                            }
-                        });
-                        None
-                    }
-                },
-                None => None,
-            }
-        });
-        old_node.map(EntryRef)
+    /// Removes the first element of the list and returns it,
+    pub fn pop_front(&self) -> Option<Entry<T>> {
+        EntryImpl::new(self, &self.head)
+            .remove_after()
+            .map(|n| self.new_entry(n))
     }
 
+    /// Returns an iterator over the elements of the list.
     pub fn iter(&self) -> Iter<T> {
         Iter {
-            head: &self.head,
-            tail: &self.tail,
+            list: self,
             curr: self.head.clone(),
         }
     }
@@ -148,19 +230,18 @@ impl<T> LinkedList<T> {
 /// This `struct` is created by [`LinkedList::iter()`]. See its
 /// documentation for more.
 pub struct Iter<'a, T: 'a> {
-    head: &'a Arc<Node<T>>,
-    tail: &'a RcuCell<Node<T>>,
+    list: &'a LinkedList<T>,
     curr: Arc<Node<T>>,
 }
 
-impl<T> Iterator for Iter<'_, T> {
-    type Item = EntryRef<T>;
+impl<'a, T> Iterator for Iter<'a, T> {
+    type Item = Entry<'a, T>;
 
     fn next(&mut self) -> Option<Self::Item> {
         let node = loop {
             match self.curr.next.read() {
                 Some(next) => {
-                    if Arc::ptr_eq(&next, self.head) {
+                    if Arc::ptr_eq(&next, &self.list.head) {
                         // skip the head node which is being setup
                         core::hint::spin_loop();
                         continue;
@@ -169,7 +250,7 @@ impl<T> Iterator for Iter<'_, T> {
                     break next;
                 }
                 None => {
-                    if self.tail.arc_eq(&self.curr) {
+                    if self.list.tail.arc_eq(&self.curr) {
                         return None;
                     }
                     // the next node is not setup yet
@@ -179,7 +260,10 @@ impl<T> Iterator for Iter<'_, T> {
             }
         };
 
-        Some(EntryRef(node))
+        Some(Entry {
+            list: self.list,
+            node,
+        })
     }
 }
 
@@ -187,7 +271,7 @@ impl<T> Iterator for Iter<'_, T> {
 mod tests {
     #[test]
     fn test_list() {
-        let mut list = super::LinkedList::new();
+        let list = super::LinkedList::new();
         assert!(list.is_empty());
 
         let a = list.push_back(1);
@@ -214,7 +298,7 @@ mod tests {
 
     #[test]
     fn test_iter() {
-        let mut list = super::LinkedList::new();
+        let list = super::LinkedList::new();
         list.push_back(1);
         list.push_back(2);
         list.push_back(3);
