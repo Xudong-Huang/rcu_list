@@ -144,7 +144,6 @@ impl<T> LinkedList<T> {
     }
 
     /// Appends an element to the back of the list
-    /// and returns an Entry that can be used to manipulate the element.
     pub fn push_back(&self, elt: T) {
         let new_node = Arc::new(Node {
             next: RcuCell::none(),
@@ -166,7 +165,6 @@ impl<T> LinkedList<T> {
     }
 
     /// Insert an element to the front of the list.
-    /// and returns an Entry that can be used to manipulate the element.
     pub fn push_front(&self, elt: T) {
         EntryImpl::new(self, &self.head).insert_after(elt);
     }
