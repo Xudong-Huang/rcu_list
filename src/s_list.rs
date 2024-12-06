@@ -3,6 +3,7 @@ use core::fmt;
 use core::ops::Deref;
 use rcu_cell::RcuCell;
 
+#[derive(Debug)]
 pub struct Node<T> {
     next: RcuCell<Node<T>>,
     // only the head node has None data
@@ -47,38 +48,38 @@ impl<'a, 'b, T> EntryImpl<'a, 'b, T> {
         Self { list, node }
     }
 
-    fn insert_after(&self, elt: T) -> Arc<Node<T>> {
+    fn insert_after(&self, elt: T) {
         let new_node = Arc::new(Node {
-            // We first set the next to the head, this create a
-            // circular LinkedList. After the new node is setup,
-            // we will update this next to the old node. This
-            // prevent iter to a false tail node which next is None
-            // and the head.next swap would not be unexpected none
-            next: RcuCell::from(self.list.head.clone()),
+            // // We first set the next to the head, this create a
+            // // circular LinkedList. After the new node is setup,
+            // // we will update this next to the old node. This
+            // // prevent iter to a false tail node which next is None
+            // // and the head.next swap would not be unexpected none
+            // next: RcuCell::from(self.list.head.clone()),
+            next: RcuCell::none(),
             data: Some(elt),
         });
 
         // swap the next
-        match self.node.next.write(new_node.clone()) {
-            Some(old_node) => {
-                // setup the next node
-                new_node.next.write(old_node);
+        let old_next = self.node.next.update(|next| {
+            if let Some(next) = next {
+                new_node.next.write(next);
             }
-            None => {
-                // update the tail to the new node
-                self.list.tail.write(new_node.clone());
-                self.list.tail.update(|tail| {
-                    let tail = tail.unwrap(); // tail is never none
-                    if Arc::ptr_eq(&tail, self.node) {
-                        Some(new_node.clone())
-                    } else {
-                        Some(tail)
-                    }
-                });
-            }
-        }
+            Some(new_node.clone())
+        });
 
-        new_node
+        if old_next.is_none() {
+            // update the tail to the new node
+            self.list.tail.write(new_node.clone());
+            self.list.tail.update(|tail| {
+                let tail = tail.unwrap(); // tail is never none
+                if Arc::ptr_eq(&tail, self.node) {
+                    Some(new_node)
+                } else {
+                    Some(tail)
+                }
+            });
+        }
     }
 
     fn remove_after(&self) -> Option<Arc<Node<T>>> {
@@ -104,6 +105,7 @@ impl<'a, 'b, T> EntryImpl<'a, 'b, T> {
     }
 }
 
+#[derive(Debug)]
 pub struct LinkedList<T> {
     head: Arc<Node<T>>,
     tail: RcuCell<Node<T>>,
@@ -199,11 +201,11 @@ impl<T> Iterator for Iter<'_, T> {
         let node = loop {
             match self.curr.next.read() {
                 Some(next) => {
-                    if Arc::ptr_eq(&next, &self.list.head) {
-                        // skip the head node which is being setup
-                        core::hint::spin_loop();
-                        continue;
-                    }
+                    // if Arc::ptr_eq(&next, &self.list.head) {
+                    //     // skip the head node which is being setup
+                    //     core::hint::spin_loop();
+                    //     continue;
+                    // }
                     self.curr = next.clone();
                     break next;
                 }
