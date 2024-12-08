@@ -50,17 +50,10 @@ impl<'a, 'b, T> EntryImpl<'a, 'b, T> {
 
     fn insert_after(&self, elt: T) {
         let new_node = Arc::new(Node {
-            // // We first set the next to the head, this create a
-            // // circular LinkedList. After the new node is setup,
-            // // we will update this next to the old node. This
-            // // prevent iter to a false tail node which next is None
-            // // and the head.next swap would not be unexpected none
-            // next: RcuCell::from(self.list.head.clone()),
             next: RcuCell::none(),
             data: Some(elt),
         });
 
-        // swap the next
         let old_next = self.node.next.update(|next| {
             if let Some(next) = next {
                 new_node.next.write(next);
@@ -70,7 +63,6 @@ impl<'a, 'b, T> EntryImpl<'a, 'b, T> {
 
         if old_next.is_none() {
             // update the tail to the new node
-            self.list.tail.write(new_node.clone());
             self.list.tail.update(|tail| {
                 let tail = tail.unwrap(); // tail is never none
                 if Arc::ptr_eq(&tail, self.node) {
@@ -83,24 +75,20 @@ impl<'a, 'b, T> EntryImpl<'a, 'b, T> {
     }
 
     fn remove_after(&self) -> Option<Arc<Node<T>>> {
-        let next = &self.node.next;
-        next.update(|next| {
-            next.and_then(|next| {
-                match next.next.read() {
-                    Some(next_next) => Some(next_next),
-                    None => {
-                        self.list.tail.update(|tail| {
-                            let tail = tail.unwrap(); // tail is never none
-                            if Arc::ptr_eq(&tail, &next) {
-                                Some(self.node.clone())
-                            } else {
-                                Some(tail)
-                            }
-                        });
-                        None
-                    }
+        self.node.next.update(|next| {
+            let next = match next {
+                Some(next) => next,
+                None => return None,
+            };
+            self.list.tail.update(|tail| {
+                let tail = tail.unwrap(); // tail is never none
+                if Arc::ptr_eq(&tail, &next) {
+                    Some(self.node.clone())
+                } else {
+                    Some(tail)
                 }
-            })
+            });
+            next.next.read()
         })
     }
 }
@@ -152,18 +140,11 @@ impl<T> LinkedList<T> {
             data: Some(elt),
         });
 
-        // swap the tail
-        match self.tail.write(new_node.clone()) {
-            Some(tail_node) => {
-                // the iter may stop here before the next is setup
-                let old = tail_node.next.write(new_node.clone());
-                assert!(old.is_none());
-            }
-            None => {
-                // the tail always points to a valid node
-                unreachable!("tail node should always be valid");
-            }
-        }
+        self.tail.update(|tail| {
+            let old_tail = tail.unwrap(); // tail is never none
+            old_tail.next.write(new_node.clone());
+            Some(new_node)
+        });
     }
 
     /// Insert an element to the front of the list.
@@ -201,11 +182,6 @@ impl<T> Iterator for Iter<'_, T> {
         let node = loop {
             match self.curr.next.read() {
                 Some(next) => {
-                    // if Arc::ptr_eq(&next, &self.list.head) {
-                    //     // skip the head node which is being setup
-                    //     core::hint::spin_loop();
-                    //     continue;
-                    // }
                     self.curr = next.clone();
                     break next;
                 }

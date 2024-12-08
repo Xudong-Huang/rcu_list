@@ -14,3 +14,7 @@ crossbeam-epoch = "0.9.8"
 [[bench]]
 name = "stack"
 harness = false
+
+[[bench]]
+name = "queue"
+harness = false
