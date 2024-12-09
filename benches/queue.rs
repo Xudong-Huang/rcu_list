@@ -16,6 +16,10 @@ fn treiber_stack(c: &mut Criterion) {
     c.bench_function("queue-mutex-list", |b| {
         b.iter(run::<mutex_single_list::MutexQueue<usize>>)
     });
+
+    c.bench_function("crossbeam-queue", |b| {
+        b.iter(run::<crossbem_seg_queue::CrossbeamQueue<usize>>)
+    });
 }
 
 trait Queue<T> {
@@ -147,6 +151,35 @@ mod scc_queue {
 
         fn pop(&self) -> Option<T> {
             self.queue.pop().map(|v| **v)
+        }
+
+        fn is_empty(&self) -> bool {
+            self.queue.is_empty()
+        }
+    }
+}
+
+mod crossbem_seg_queue {
+    use super::Queue;
+
+    #[derive(Debug)]
+    pub struct CrossbeamQueue<T> {
+        queue: crossbeam_queue::SegQueue<T>,
+    }
+
+    impl<T> Queue<T> for CrossbeamQueue<T> {
+        fn new() -> CrossbeamQueue<T> {
+            CrossbeamQueue {
+                queue: Default::default(),
+            }
+        }
+
+        fn push(&self, value: T) {
+            self.queue.push(value);
+        }
+
+        fn pop(&self) -> Option<T> {
+            self.queue.pop()
         }
 
         fn is_empty(&self) -> bool {

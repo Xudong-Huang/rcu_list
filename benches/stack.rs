@@ -22,6 +22,10 @@ fn treiber_stack(c: &mut Criterion) {
     c.bench_function("trieber_stack-seize", |b| {
         b.iter(run::<seize_stack::TreiberStack<usize>>)
     });
+
+    c.bench_function("scc-stack", |b| {
+        b.iter(run::<scc_stack::TreiberStack<usize>>)
+    });
 }
 
 trait Stack<T> {
@@ -327,6 +331,35 @@ mod rcu_single_list {
 
         fn pop(&self) -> Option<T> {
             self.list.pop_front().map(|entry| *entry)
+        }
+
+        fn is_empty(&self) -> bool {
+            self.list.is_empty()
+        }
+    }
+}
+
+mod scc_stack {
+    use super::Stack;
+
+    #[derive(Debug)]
+    pub struct TreiberStack<T> {
+        list: scc::Stack<T>,
+    }
+
+    impl<T: Copy + 'static> Stack<T> for TreiberStack<T> {
+        fn new() -> TreiberStack<T> {
+            TreiberStack {
+                list: scc::Stack::default(),
+            }
+        }
+
+        fn push(&self, value: T) {
+            self.list.push(value);
+        }
+
+        fn pop(&self) -> Option<T> {
+            self.list.pop().map(|entry| **entry)
         }
 
         fn is_empty(&self) -> bool {
