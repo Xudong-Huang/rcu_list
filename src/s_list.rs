@@ -1,4 +1,5 @@
-///! A simple concurrent singly linked list
+//! A simple concurrent singly linked list
+
 use alloc::sync::Arc;
 use rcu_cell::RcuCell;
 

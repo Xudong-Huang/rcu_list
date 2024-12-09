@@ -11,8 +11,10 @@ fn treiber_stack(c: &mut Criterion) {
         b.iter(run::<rcu_single_list::ListQueue<usize>>)
     });
 
+    c.bench_function("scc_queue", |b| b.iter(run::<scc_queue::SccQueue<usize>>));
+
     c.bench_function("queue-mutex-list", |b| {
-        b.iter(run::<mutex_single_list::ListQueue<usize>>)
+        b.iter(run::<mutex_single_list::MutexQueue<usize>>)
     });
 }
 
@@ -99,13 +101,13 @@ mod mutex_single_list {
     use parking_lot::Mutex;
 
     #[derive(Debug)]
-    pub struct ListQueue<T> {
+    pub struct MutexQueue<T> {
         list: Mutex<VecDeque<T>>,
     }
 
-    impl<T: Copy> Queue<T> for ListQueue<T> {
-        fn new() -> ListQueue<T> {
-            ListQueue {
+    impl<T: Copy> Queue<T> for MutexQueue<T> {
+        fn new() -> MutexQueue<T> {
+            MutexQueue {
                 list: Default::default(),
             }
         }
@@ -120,6 +122,35 @@ mod mutex_single_list {
 
         fn is_empty(&self) -> bool {
             self.list.lock().is_empty()
+        }
+    }
+}
+
+mod scc_queue {
+    use super::Queue;
+
+    #[derive(Debug)]
+    pub struct SccQueue<T> {
+        queue: scc::Queue<T>,
+    }
+
+    impl<T: Copy + 'static> Queue<T> for SccQueue<T> {
+        fn new() -> SccQueue<T> {
+            SccQueue {
+                queue: Default::default(),
+            }
+        }
+
+        fn push(&self, value: T) {
+            self.queue.push(value);
+        }
+
+        fn pop(&self) -> Option<T> {
+            self.queue.pop().map(|v| **v)
+        }
+
+        fn is_empty(&self) -> bool {
+            self.queue.is_empty()
         }
     }
 }
