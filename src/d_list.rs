@@ -1,10 +1,10 @@
 use alloc::sync::{Arc, Weak};
 use rcu_cell::RcuCell;
 
-use core::fmt;
 use core::mem::ManuallyDrop;
 use core::ops::Deref;
 use core::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
+use core::{cmp, fmt};
 
 #[derive(Debug)]
 struct Node<T> {
@@ -198,6 +198,42 @@ impl<T: PartialEq> PartialEq for Entry<T> {
         self.0.data == other.0.data
     }
 }
+
+impl<T> AsRef<T> for Entry<T> {
+    fn as_ref(&self) -> &T {
+        self.deref()
+    }
+}
+
+impl<T: PartialOrd> PartialOrd for Entry<T> {
+    fn partial_cmp(&self, other: &Entry<T>) -> Option<cmp::Ordering> {
+        (**self).partial_cmp(&**other)
+    }
+
+    fn lt(&self, other: &Entry<T>) -> bool {
+        *(*self) < *(*other)
+    }
+
+    fn le(&self, other: &Entry<T>) -> bool {
+        *(*self) <= *(*other)
+    }
+
+    fn gt(&self, other: &Entry<T>) -> bool {
+        *(*self) > *(*other)
+    }
+
+    fn ge(&self, other: &Entry<T>) -> bool {
+        *(*self) >= *(*other)
+    }
+}
+
+impl<T: Ord> Ord for Entry<T> {
+    fn cmp(&self, other: &Entry<T>) -> cmp::Ordering {
+        (**self).cmp(&**other)
+    }
+}
+
+impl<T: Eq> Eq for Entry<T> {}
 
 /// A concurrent doubly linked list.
 #[derive(Debug)]
