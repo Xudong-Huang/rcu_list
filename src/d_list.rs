@@ -7,7 +7,7 @@ use core::ops::Deref;
 use core::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
 
 #[derive(Debug)]
-pub struct Node<T> {
+struct Node<T> {
     version: AtomicUsize,
     next: RcuCell<Node<T>>,
     // this is actually Weak<Node<T>>, but we can't use Weak in atomic
@@ -152,18 +152,10 @@ impl<T> Node<T> {
     }
 }
 
+/// An entry in a `LinkedList`.
 pub struct Entry<T>(Arc<Node<T>>);
 
 impl<T> Entry<T> {
-    // pub fn insert_after(&self, elt: T) -> Entry<T> {
-    // 	let node = self.0.insert_after(elt);
-    // 	Entry(node)
-    // }
-
-    // pub fn remove_after(&self) -> Option<Entry<T>> {
-    // 	self.0.remove_after().map(Entry)
-    // }
-
     /// Remove the entry from the list.
     pub fn remove(self) {
         let curr_node = &self.0;
@@ -207,6 +199,7 @@ impl<T: PartialEq> PartialEq for Entry<T> {
     }
 }
 
+/// A concurrent doubly linked list.
 #[derive(Debug)]
 pub struct LinkedList<T> {
     head: Arc<Node<T>>,
@@ -220,6 +213,7 @@ impl<T> Default for LinkedList<T> {
 }
 
 impl<T> LinkedList<T> {
+    /// Creates a new empty `LinkedList`.
     pub fn new() -> Self {
         // this is only used for list head, should never deref it's data
         let head = Arc::new(Node::default());
@@ -231,10 +225,12 @@ impl<T> LinkedList<T> {
         Self { head, tail }
     }
 
+    /// Returns true if the list is empty.
     pub fn is_empty(&self) -> bool {
         self.head.next.arc_eq(&self.tail)
     }
 
+    /// Returns an Entry to the front element, or `None` if the list is empty.
     pub fn front(&self) -> Option<Entry<T>> {
         // head.next is always non empty
         let node = self.head.next();
@@ -242,6 +238,7 @@ impl<T> LinkedList<T> {
         node.data.is_some().then(|| Entry(node))
     }
 
+    /// Returns an Entry to the back element, or `None` if the list is empty.
     pub fn back(&self) -> Option<Entry<T>> {
         // tail.prev is always non empty
         let node = self.tail.prev().unwrap();
@@ -249,6 +246,7 @@ impl<T> LinkedList<T> {
         node.data.is_some().then(|| Entry(node))
     }
 
+    /// Pushes an element to the front of the list, and returns an Entry to it.
     pub fn push_front(&self, elt: T) -> Entry<T> {
         let new_node = Arc::new(Node::new(elt));
         new_node.set_prev(&self.head);
@@ -264,6 +262,7 @@ impl<T> LinkedList<T> {
         Entry(new_node)
     }
 
+    /// Pops the front element of the list, returns `None` if the list is empty.
     pub fn pop_front(&self) -> Option<Entry<T>> {
         // unwrap safety: head is never revmoed
         self.head.lock().unwrap();
@@ -275,14 +274,18 @@ impl<T> LinkedList<T> {
         let next = self.head.next();
         // unwrap safety: next must be valid since it's still in the list
         next.lock().unwrap();
+
         // we are sure next is not the tail
         let next_next = next.next();
         self.head.next.write(next_next);
+
         next.unlock_remove();
         self.head.unlock();
+
         Some(Entry(next))
     }
 
+    /// Pushes an element to the back of the list, and returns an Entry to it.
     pub fn push_back(&self, elt: T) -> Entry<T> {
         let new_node = Arc::new(Node::new(elt));
         new_node.next.write(self.tail.clone());
@@ -296,37 +299,40 @@ impl<T> LinkedList<T> {
         Entry(new_node)
     }
 
-    // pub fn pop_back(&self) -> Option<Entry<T>> {
-    //     loop {
-    //         let tail_node = self.tail.read().unwrap();
-    //         if Arc::ptr_eq(&tail_node, &self.head) {
-    //             return None;
-    //         }
-    //         let prev_node = match self.lock_prev_node(&tail_node) {
-    //             Ok(prev_node) => prev_node,
-    //             // the tail is removed, try again
-    //             Err(_) => continue,
-    //         };
-    //         // since the prev node is lock, the curr node should not be removed
-    //         tail_node.lock().expect("tail node removed!");
+    /// Pops the back element of the list, returns `None` if the list is empty.
+    pub fn pop_back(&self) -> Option<Entry<T>> {
+        // loop {
+        //     let tail_node = self.tail.read().unwrap();
+        //     if Arc::ptr_eq(&tail_node, &self.head) {
+        //         return None;
+        //     }
+        //     let prev_node = match self.lock_prev_node(&tail_node) {
+        //         Ok(prev_node) => prev_node,
+        //         // the tail is removed, try again
+        //         Err(_) => continue,
+        //     };
+        //     // since the prev node is lock, the curr node should not be removed
+        //     tail_node.lock().expect("tail node removed!");
 
-    //         match tail_node.next.read() {
-    //             None => {
-    //                 // tail node is really the tail
-    //                 prev_node.next.take();
-    //             }
-    //             Some(next_node) => {
-    //                 // the tail is advanced
-    //                 prev_node.next.write(next_node.clone());
-    //                 // next_node.prev = prev_node.prev.clone();
-    //             }
-    //         }
-    //         tail_node.unlock_remove();
-    //         prev_node.unlock();
-    //         return Some(Entry(tail_node));
-    //     }
-    // }
+        //     match tail_node.next.read() {
+        //         None => {
+        //             // tail node is really the tail
+        //             prev_node.next.take();
+        //         }
+        //         Some(next_node) => {
+        //             // the tail is advanced
+        //             prev_node.next.write(next_node.clone());
+        //             // next_node.prev = prev_node.prev.clone();
+        //         }
+        //     }
+        //     tail_node.unlock_remove();
+        //     prev_node.unlock();
+        //     return Some(Entry(tail_node));
+        // }
+        todo!()
+    }
 
+    /// Returns an iterator over the elements of the list.
     pub fn iter(&self) -> Iter<T> {
         Iter {
             tail: &self.tail,
@@ -387,7 +393,7 @@ mod tests {
     fn test_remove_entry() {
         let list = super::LinkedList::new();
         let entry = list.push_back(1);
-		assert!(!entry.is_removed());
+        assert!(!entry.is_removed());
         assert!(*entry == 1);
         entry.remove();
         assert!(list.is_empty());
