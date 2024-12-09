@@ -160,7 +160,7 @@ impl<T> LinkedList<T> {
     /// Returns an iterator over the elements of the list.
     pub fn iter(&self) -> Iter<T> {
         Iter {
-            list: self,
+            _list: self,
             curr: self.head.clone(),
         }
     }
@@ -171,7 +171,7 @@ impl<T> LinkedList<T> {
 /// This `struct` is created by [`LinkedList::iter()`]. See its
 /// documentation for more.
 pub struct Iter<'a, T: 'a> {
-    list: &'a LinkedList<T>,
+    _list: &'a LinkedList<T>,
     curr: Arc<Node<T>>,
 }
 
@@ -179,24 +179,11 @@ impl<T> Iterator for Iter<'_, T> {
     type Item = Entry<T>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let node = loop {
-            match self.curr.next.read() {
-                Some(next) => {
-                    self.curr = next.clone();
-                    break next;
-                }
-                None => {
-                    if self.list.tail.arc_eq(&self.curr) {
-                        return None;
-                    }
-                    // the next node is not setup yet
-                    // wait for setup
-                    core::hint::spin_loop();
-                }
-            }
-        };
-
-        Some(Entry(node))
+        let next = self.curr.next.read();
+        if let Some(ref node) = next {
+            self.curr = node.clone();
+        }
+        next.map(Entry)
     }
 }
 
