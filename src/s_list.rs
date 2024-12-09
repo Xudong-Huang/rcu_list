@@ -1,15 +1,18 @@
+///! A simple concurrent singly linked list
 use alloc::sync::Arc;
-use core::fmt;
-use core::ops::Deref;
 use rcu_cell::RcuCell;
 
+use core::ops::Deref;
+use core::{cmp, fmt};
+
 #[derive(Debug)]
-pub struct Node<T> {
+struct Node<T> {
     next: RcuCell<Node<T>>,
     // only the head node has None data
     data: Option<T>,
 }
 
+/// An entry in a `LinkedList`. You can `deref` it to get the value.
 #[derive(Clone)]
 pub struct Entry<T>(Arc<Node<T>>);
 
@@ -37,6 +40,36 @@ impl<T> AsRef<T> for Entry<T> {
         self.deref()
     }
 }
+
+impl<T: PartialOrd> PartialOrd for Entry<T> {
+    fn partial_cmp(&self, other: &Entry<T>) -> Option<cmp::Ordering> {
+        (**self).partial_cmp(&**other)
+    }
+
+    fn lt(&self, other: &Entry<T>) -> bool {
+        *(*self) < *(*other)
+    }
+
+    fn le(&self, other: &Entry<T>) -> bool {
+        *(*self) <= *(*other)
+    }
+
+    fn gt(&self, other: &Entry<T>) -> bool {
+        *(*self) > *(*other)
+    }
+
+    fn ge(&self, other: &Entry<T>) -> bool {
+        *(*self) >= *(*other)
+    }
+}
+
+impl<T: Ord> Ord for Entry<T> {
+    fn cmp(&self, other: &Entry<T>) -> cmp::Ordering {
+        (**self).cmp(&**other)
+    }
+}
+
+impl<T: Eq> Eq for Entry<T> {}
 
 struct EntryImpl<'a, 'b, T> {
     list: &'a LinkedList<T>,
@@ -93,6 +126,7 @@ impl<'a, 'b, T> EntryImpl<'a, 'b, T> {
     }
 }
 
+/// Concurrent singly linked list
 #[derive(Debug)]
 pub struct LinkedList<T> {
     head: Arc<Node<T>>,
@@ -106,6 +140,7 @@ impl<T> Default for LinkedList<T> {
 }
 
 impl<T> LinkedList<T> {
+    /// Creates a new, empty `LinkedList`.
     pub fn new() -> Self {
         // this is only used for list head, should never deref it's data
         let head = Arc::new(Node {
