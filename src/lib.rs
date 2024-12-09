@@ -3,5 +3,8 @@
 
 extern crate alloc;
 
-pub mod s_list;
 pub mod d_list;
+pub mod s_list;
+
+pub use d_list::LinkedList as DoubleLinkedList;
+pub use s_list::LinkedList as SingleLinedList;
