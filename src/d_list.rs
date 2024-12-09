@@ -137,6 +137,7 @@ impl<T> Node<T> {
                 // we will do more check later
                 Some(prev) => prev,
             };
+
             if prev_node.lock().is_err() {
                 // the prev node is removed, try again
                 continue;
@@ -293,12 +294,14 @@ impl<T> LinkedList<T> {
         new_node.set_prev(&self.head);
         // unwrap safety: head is never revmoed
         self.head.lock().unwrap();
+        new_node.lock().unwrap();
+
         let next_node = self.head.next();
-        // we don't need to lock the new node, till now no one will see it
         next_node.set_prev(&new_node);
         new_node.next.write(next_node);
         self.head.next.write(new_node.clone());
 
+        new_node.unlock();
         self.head.unlock();
         Entry(new_node)
     }
@@ -312,19 +315,19 @@ impl<T> LinkedList<T> {
             return None;
         }
 
-        let next = self.head.next();
+        let curr_node = self.head.next();
         // unwrap safety: next must be valid since it's still in the list
-        next.lock().unwrap();
+        curr_node.lock().unwrap();
 
         // we are sure next is not the tail
-        let next_next = next.next();
-        next_next.set_prev(&self.head);
-        self.head.next.write(next_next);
+        let next_node = curr_node.next();
+        next_node.set_prev(&self.head);
+        self.head.next.write(next_node);
 
-        next.unlock_remove();
+        curr_node.unlock_remove();
         self.head.unlock();
 
-        Some(Entry(next))
+        Some(Entry(curr_node))
     }
 
     /// Pushes an element to the back of the list, and returns an Entry to it.
@@ -333,10 +336,12 @@ impl<T> LinkedList<T> {
         new_node.next.write(self.tail.clone());
         // should always success since the tail is never removed
         let prev_node = self.tail.lock_prev_node().unwrap();
+        new_node.lock().unwrap();
         new_node.set_prev(&prev_node);
-        prev_node.next.write(new_node.clone());
         self.tail.set_prev(&new_node);
+        prev_node.next.write(new_node.clone());
 
+        new_node.unlock();
         prev_node.unlock();
         Entry(new_node)
     }

@@ -11,11 +11,11 @@ fn treiber_stack(c: &mut Criterion) {
         b.iter(run::<rcu_single_list::ListQueue<usize>>)
     });
 
-    c.bench_function("queue-rcu-double-list", |b| {
+    c.bench_function("queue-rcu-double-list-head", |b| {
         b.iter(run::<rcu_double_list::ListQueue<usize>>)
     });
 
-    c.bench_function("queue-rcu-double-list-rev", |b| {
+    c.bench_function("queue-rcu-double-list-tail", |b| {
         b.iter(run::<rcu_double_list_rev::ListQueue<usize>>)
     });
 
