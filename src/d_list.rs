@@ -131,7 +131,7 @@ impl<T> Node<T> {
 
             let prev_node = match self.prev() {
                 // something wrong, like the prev node is deleted, or the current node is deleted
-                None => return Err(()),
+                None => continue,
 
                 // the prev can change due to prev insert/remove
                 // we will do more check later
@@ -277,7 +277,12 @@ impl<T> LinkedList<T> {
     /// Returns an Entry to the back element, or `None` if the list is empty.
     pub fn back(&self) -> Option<Entry<T>> {
         // tail.prev is always non empty
-        let node = self.tail.prev().unwrap();
+        let node = loop {
+            match self.tail.prev() {
+                Some(node) => break node,
+                None => continue,
+            }
+        };
         // only the head has None data
         node.data.is_some().then(|| Entry(node))
     }
@@ -313,6 +318,7 @@ impl<T> LinkedList<T> {
 
         // we are sure next is not the tail
         let next_next = next.next();
+        next_next.set_prev(&self.head);
         self.head.next.write(next_next);
 
         next.unlock_remove();
@@ -337,35 +343,46 @@ impl<T> LinkedList<T> {
 
     /// Pops the back element of the list, returns `None` if the list is empty.
     pub fn pop_back(&self) -> Option<Entry<T>> {
-        // loop {
-        //     let tail_node = self.tail.read().unwrap();
-        //     if Arc::ptr_eq(&tail_node, &self.head) {
-        //         return None;
-        //     }
-        //     let prev_node = match self.lock_prev_node(&tail_node) {
-        //         Ok(prev_node) => prev_node,
-        //         // the tail is removed, try again
-        //         Err(_) => continue,
-        //     };
-        //     // since the prev node is lock, the curr node should not be removed
-        //     tail_node.lock().expect("tail node removed!");
+        loop {
+            let curr_node = match self.tail.prev() {
+                Some(node) => node,
+                None => continue,
+            };
 
-        //     match tail_node.next.read() {
-        //         None => {
-        //             // tail node is really the tail
-        //             prev_node.next.take();
-        //         }
-        //         Some(next_node) => {
-        //             // the tail is advanced
-        //             prev_node.next.write(next_node.clone());
-        //             // next_node.prev = prev_node.prev.clone();
-        //         }
-        //     }
-        //     tail_node.unlock_remove();
-        //     prev_node.unlock();
-        //     return Some(Entry(tail_node));
-        // }
-        todo!()
+            if Arc::ptr_eq(&curr_node, &self.head) {
+                return None;
+            }
+            let prev_node = match curr_node.lock_prev_node() {
+                Ok(node) => node,
+                Err(_) => continue,
+            };
+
+            // before lock curr_node, some thing changed, try again
+            if !curr_node.next.arc_eq(&self.tail) {
+                prev_node.unlock();
+                continue;
+            }
+
+            if curr_node.lock().is_err() {
+                prev_node.unlock();
+                continue;
+            }
+
+            // after lock curr_node some thing changed, try again
+            if !curr_node.next.arc_eq(&self.tail) {
+                curr_node.unlock();
+                prev_node.unlock();
+                continue;
+            }
+
+            prev_node.next.write(self.tail.clone());
+            self.tail.set_prev(&prev_node);
+
+            curr_node.unlock_remove();
+            prev_node.unlock();
+
+            return Some(Entry(curr_node));
+        }
     }
 
     /// Returns an iterator over the elements of the list.
@@ -422,6 +439,30 @@ mod tests {
         assert_eq!(*list.pop_front().unwrap(), 0);
         assert_eq!(*list.pop_front().unwrap(), 1);
         assert_eq!(*list.pop_front().unwrap(), 2);
+        assert!(list.is_empty());
+    }
+
+    #[test]
+    fn test_list_1() {
+        let list = super::LinkedList::new();
+        assert!(list.is_empty());
+
+        list.push_front(1);
+        assert!(!list.is_empty());
+        assert_eq!(*list.front().unwrap(), 1);
+        assert_eq!(*list.back().unwrap(), 1);
+
+        list.push_front(2);
+        assert_eq!(*list.front().unwrap(), 2);
+        assert_eq!(*list.back().unwrap(), 1);
+
+        list.push_back(0);
+        assert_eq!(*list.front().unwrap(), 2);
+        assert_eq!(*list.back().unwrap(), 0);
+
+        assert_eq!(*list.pop_back().unwrap(), 0);
+        assert_eq!(*list.pop_back().unwrap(), 1);
+        assert_eq!(*list.pop_back().unwrap(), 2);
         assert!(list.is_empty());
     }
 

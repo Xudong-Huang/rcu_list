@@ -12,7 +12,11 @@ fn treiber_stack(c: &mut Criterion) {
     });
 
     c.bench_function("queue-rcu-double-list", |b| {
-        b.iter(run::<rcu_single_list::ListQueue<usize>>)
+        b.iter(run::<rcu_double_list::ListQueue<usize>>)
+    });
+
+    c.bench_function("queue-rcu-double-list-rev", |b| {
+        b.iter(run::<rcu_double_list_rev::ListQueue<usize>>)
     });
 
     c.bench_function("scc_queue", |b| b.iter(run::<scc_queue::SccQueue<usize>>));
@@ -124,6 +128,36 @@ mod rcu_double_list {
 
         fn pop(&self) -> Option<T> {
             self.list.pop_front().map(|entry| *entry)
+        }
+
+        fn is_empty(&self) -> bool {
+            self.list.is_empty()
+        }
+    }
+}
+
+mod rcu_double_list_rev {
+    use super::Queue;
+    use rcu_list::d_list::LinkedList;
+
+    #[derive(Debug)]
+    pub struct ListQueue<T> {
+        list: LinkedList<T>,
+    }
+
+    impl<T: Copy> Queue<T> for ListQueue<T> {
+        fn new() -> ListQueue<T> {
+            ListQueue {
+                list: LinkedList::new(),
+            }
+        }
+
+        fn push(&self, value: T) {
+            self.list.push_front(value);
+        }
+
+        fn pop(&self) -> Option<T> {
+            self.list.pop_back().map(|entry| *entry)
         }
 
         fn is_empty(&self) -> bool {
