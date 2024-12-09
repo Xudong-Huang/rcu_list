@@ -294,9 +294,9 @@ impl<T> LinkedList<T> {
         new_node.set_prev(&self.head);
         // unwrap safety: head is never revmoed
         self.head.lock().unwrap();
-        new_node.lock().unwrap();
-
         let next_node = self.head.next();
+
+        new_node.lock().unwrap();
         next_node.set_prev(&new_node);
         new_node.next.write(next_node);
         self.head.next.write(new_node.clone());
@@ -336,8 +336,9 @@ impl<T> LinkedList<T> {
         new_node.next.write(self.tail.clone());
         // should always success since the tail is never removed
         let prev_node = self.tail.lock_prev_node().unwrap();
-        new_node.lock().unwrap();
         new_node.set_prev(&prev_node);
+        new_node.lock().unwrap();
+
         self.tail.set_prev(&new_node);
         prev_node.next.write(new_node.clone());
 
@@ -354,9 +355,12 @@ impl<T> LinkedList<T> {
                 None => continue,
             };
 
+            // the list is empty
             if Arc::ptr_eq(&curr_node, &self.head) {
                 return None;
             }
+
+            // try to lock the tail.prev.prev node
             let prev_node = match curr_node.lock_prev_node() {
                 Ok(node) => node,
                 Err(_) => continue,
@@ -368,6 +372,7 @@ impl<T> LinkedList<T> {
                 continue;
             }
 
+            // try lock the curr node
             if curr_node.lock().is_err() {
                 prev_node.unlock();
                 continue;
@@ -380,8 +385,8 @@ impl<T> LinkedList<T> {
                 continue;
             }
 
-            prev_node.next.write(self.tail.clone());
             self.tail.set_prev(&prev_node);
+            prev_node.next.write(self.tail.clone());
 
             curr_node.unlock_remove();
             prev_node.unlock();
