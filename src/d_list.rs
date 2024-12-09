@@ -6,6 +6,7 @@ use core::mem::ManuallyDrop;
 use core::ops::Deref;
 use core::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
 
+#[derive(Debug)]
 pub struct Node<T> {
     version: AtomicUsize,
     next: RcuCell<Node<T>>,
@@ -74,24 +75,25 @@ impl<T> Node<T> {
     #[inline]
     fn lock(&self) -> Result<usize, ()> {
         let mut version;
+        let backoff = crossbeam_utils::Backoff::new();
         loop {
             version = self.try_lock()?;
             if version != usize::MAX {
                 break;
             }
-            core::hint::spin_loop();
+            backoff.snooze();
         }
         Ok(version)
     }
 
     #[inline]
     fn unlock(&self) {
-        self.version.fetch_add(2, Ordering::Relaxed);
+        self.version.fetch_add(2, Ordering::Release);
     }
 
     #[inline]
     fn unlock_remove(&self) {
-        self.version.fetch_add(3, Ordering::Relaxed);
+        self.version.fetch_add(3, Ordering::Release);
     }
 
     #[inline]
@@ -133,7 +135,7 @@ impl<T> Deref for Entry<T> {
 
 impl<T: fmt::Debug> fmt::Debug for Entry<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "EntryRef({:?})", self.0.data.as_ref().unwrap())
+        write!(f, "Entry({:?})", self.0.data.as_ref().unwrap())
     }
 }
 
@@ -143,6 +145,7 @@ impl<T: PartialEq> PartialEq for Entry<T> {
     }
 }
 
+#[derive(Debug)]
 pub struct LinkedList<T> {
     head: Arc<Node<T>>,
     tail: Arc<Node<T>>,

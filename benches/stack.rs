@@ -7,8 +7,12 @@ const THREADS: usize = 20;
 const ITEMS: usize = 1000;
 
 fn treiber_stack(c: &mut Criterion) {
-    c.bench_function("trieber_stack-rcu-list", |b| {
+    c.bench_function("trieber_stack-rcu-single-list", |b| {
         b.iter(run::<rcu_single_list::TreiberStack<usize>>)
+    });
+
+    c.bench_function("trieber_stack-rcu-double-list", |b| {
+        b.iter(run::<rcu_double_list::TreiberStack<usize>>)
     });
 
     c.bench_function("trieber_stack-rcu-stack", |b| {
@@ -312,6 +316,36 @@ mod rcu_stack {
 mod rcu_single_list {
     use super::Stack;
     use rcu_list::s_list::LinkedList;
+
+    #[derive(Debug)]
+    pub struct TreiberStack<T> {
+        list: LinkedList<T>,
+    }
+
+    impl<T: Copy> Stack<T> for TreiberStack<T> {
+        fn new() -> TreiberStack<T> {
+            TreiberStack {
+                list: LinkedList::new(),
+            }
+        }
+
+        fn push(&self, value: T) {
+            self.list.push_front(value);
+        }
+
+        fn pop(&self) -> Option<T> {
+            self.list.pop_front().map(|entry| *entry)
+        }
+
+        fn is_empty(&self) -> bool {
+            self.list.is_empty()
+        }
+    }
+}
+
+mod rcu_double_list {
+    use super::Stack;
+    use rcu_list::d_list::LinkedList;
 
     #[derive(Debug)]
     pub struct TreiberStack<T> {

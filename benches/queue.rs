@@ -7,7 +7,11 @@ const THREADS: usize = 20;
 const ITEMS: usize = 1000;
 
 fn treiber_stack(c: &mut Criterion) {
-    c.bench_function("queue-rcu-list", |b| {
+    c.bench_function("queue-rcu-single-list", |b| {
+        b.iter(run::<rcu_single_list::ListQueue<usize>>)
+    });
+
+    c.bench_function("queue-rcu-double-list", |b| {
         b.iter(run::<rcu_single_list::ListQueue<usize>>)
     });
 
@@ -71,6 +75,36 @@ criterion_main!(benches);
 mod rcu_single_list {
     use super::Queue;
     use rcu_list::s_list::LinkedList;
+
+    #[derive(Debug)]
+    pub struct ListQueue<T> {
+        list: LinkedList<T>,
+    }
+
+    impl<T: Copy> Queue<T> for ListQueue<T> {
+        fn new() -> ListQueue<T> {
+            ListQueue {
+                list: LinkedList::new(),
+            }
+        }
+
+        fn push(&self, value: T) {
+            self.list.push_back(value);
+        }
+
+        fn pop(&self) -> Option<T> {
+            self.list.pop_front().map(|entry| *entry)
+        }
+
+        fn is_empty(&self) -> bool {
+            self.list.is_empty()
+        }
+    }
+}
+
+mod rcu_double_list {
+    use super::Queue;
+    use rcu_list::d_list::LinkedList;
 
     #[derive(Debug)]
     pub struct ListQueue<T> {

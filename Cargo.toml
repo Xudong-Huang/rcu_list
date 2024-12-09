@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 rcu_cell = "1"
+crossbeam-utils = "0.8.20"
 
 [dev-dependencies]
 scc = "2.2.5"
