@@ -10,6 +10,10 @@ fn treiber_stack(c: &mut Criterion) {
     c.bench_function("queue-rcu-list", |b| {
         b.iter(run::<rcu_single_list::ListQueue<usize>>)
     });
+
+    c.bench_function("queue-mutex-list", |b| {
+        b.iter(run::<mutex_single_list::ListQueue<usize>>)
+    });
 }
 
 trait Queue<T> {
@@ -84,6 +88,38 @@ mod rcu_single_list {
 
         fn is_empty(&self) -> bool {
             self.list.is_empty()
+        }
+    }
+}
+
+mod mutex_single_list {
+    use std::collections::VecDeque;
+
+    use super::Queue;
+    use parking_lot::Mutex;
+
+    #[derive(Debug)]
+    pub struct ListQueue<T> {
+        list: Mutex<VecDeque<T>>,
+    }
+
+    impl<T: Copy> Queue<T> for ListQueue<T> {
+        fn new() -> ListQueue<T> {
+            ListQueue {
+                list: Default::default(),
+            }
+        }
+
+        fn push(&self, value: T) {
+            self.list.lock().push_back(value);
+        }
+
+        fn pop(&self) -> Option<T> {
+            self.list.lock().pop_front()
+        }
+
+        fn is_empty(&self) -> bool {
+            self.list.lock().is_empty()
         }
     }
 }

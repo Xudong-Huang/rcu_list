@@ -9,6 +9,7 @@ rcu_cell = "1"
 [dev-dependencies]
 seize = "0.4.9"
 criterion = "0.3.5"
+parking_lot = "0.12"
 crossbeam-epoch = "0.9.8"
 
 [[bench]]
