@@ -122,9 +122,71 @@ impl<T> Node<T> {
         // Safety: the next node is always valid except for the tail node
         self.next.read().unwrap()
     }
+
+    fn lock_prev_node(self: &Arc<Self>) -> Result<Arc<Node<T>>, ()> {
+        loop {
+            if self.is_removed() {
+                return Err(());
+            }
+
+            let prev_node = match self.prev() {
+                // something wrong, like the prev node is deleted, or the current node is deleted
+                None => return Err(()),
+
+                // the prev can change due to prev insert/remove
+                // we will do more check later
+                Some(prev) => prev,
+            };
+            if prev_node.lock().is_err() {
+                // the prev node is removed, try again
+                continue;
+            }
+            if !prev_node.next.arc_eq(self) {
+                // the prev node is changed, try again
+                prev_node.unlock();
+                continue;
+            }
+            // successfully lock the prev node
+            return Ok(prev_node);
+        }
+    }
 }
 
 pub struct Entry<T>(Arc<Node<T>>);
+
+impl<T> Entry<T> {
+    // pub fn insert_after(&self, elt: T) -> Entry<T> {
+    // 	let node = self.0.insert_after(elt);
+    // 	Entry(node)
+    // }
+
+    // pub fn remove_after(&self) -> Option<Entry<T>> {
+    // 	self.0.remove_after().map(Entry)
+    // }
+
+    /// Remove the entry from the list.
+    pub fn remove(&self) {
+        let curr_node = &self.0;
+        let prev_node = match curr_node.lock_prev_node() {
+            Ok(node) => node,
+            Err(_) => return,
+        };
+        // unwrap safety: the prev node is locked
+        curr_node.lock().unwrap();
+
+        let next_node = curr_node.next();
+        next_node.set_prev(&prev_node);
+        prev_node.next.write(next_node);
+
+        curr_node.unlock_remove();
+        prev_node.unlock();
+    }
+
+    /// Returns true if the entry is removed.
+    pub fn is_removed(&self) -> bool {
+        self.0.is_removed()
+    }
+}
 
 impl<T> Deref for Entry<T> {
     type Target = T;
@@ -194,11 +256,9 @@ impl<T> LinkedList<T> {
         self.head.lock().unwrap();
         let next_node = self.head.next();
         // we don't need to lock the new node, till now no one will see it
-
-        new_node.next.write(next_node.clone());
-        self.head.next.write(new_node.clone());
-
         next_node.set_prev(&new_node);
+        new_node.next.write(next_node);
+        self.head.next.write(new_node.clone());
 
         self.head.unlock();
         Entry(new_node)
@@ -223,38 +283,11 @@ impl<T> LinkedList<T> {
         Some(Entry(next))
     }
 
-    fn lock_prev_node(&self, curr_node: &Arc<Node<T>>) -> Result<Arc<Node<T>>, ()> {
-        if curr_node.is_removed() {
-            return Err(());
-        }
-        loop {
-            let prev_node = match curr_node.prev() {
-                // something wrong, like the prev node is deleted, or the current node is deleted
-                None => return Err(()),
-
-                // the prev can change due to prev insert/remove
-                // we will do more check later
-                Some(prev) => prev,
-            };
-            if prev_node.lock().is_err() {
-                // the prev node is removed, try again
-                continue;
-            }
-            if !prev_node.next.arc_eq(curr_node) {
-                // the prev node is changed, try again
-                prev_node.unlock();
-                continue;
-            }
-            // successfully lock the prev node
-            return Ok(prev_node);
-        }
-    }
-
     pub fn push_back(&self, elt: T) -> Entry<T> {
         let new_node = Arc::new(Node::new(elt));
         new_node.next.write(self.tail.clone());
         // should always success since the tail is never removed
-        let prev_node = self.lock_prev_node(&self.tail).unwrap();
+        let prev_node = self.tail.lock_prev_node().unwrap();
         new_node.set_prev(&prev_node);
         prev_node.next.write(new_node.clone());
         self.tail.set_prev(&new_node);
@@ -348,6 +381,18 @@ mod tests {
         assert_eq!(*list.pop_front().unwrap(), 1);
         assert_eq!(*list.pop_front().unwrap(), 2);
         assert!(list.is_empty());
+    }
+
+    #[test]
+    fn test_remove_entry() {
+        let list = super::LinkedList::new();
+        let entry = list.push_back(1);
+        entry.remove();
+        assert!(entry.is_removed());
+        assert!(*entry == 1);
+        assert!(list.is_empty());
+        assert!(list.front().is_none());
+        assert!(list.back().is_none());
     }
 
     #[test]
