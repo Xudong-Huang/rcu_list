@@ -165,7 +165,7 @@ impl<T> Entry<T> {
     // }
 
     /// Remove the entry from the list.
-    pub fn remove(&self) {
+    pub fn remove(self) {
         let curr_node = &self.0;
         let prev_node = match curr_node.lock_prev_node() {
             Ok(node) => node,
@@ -387,9 +387,9 @@ mod tests {
     fn test_remove_entry() {
         let list = super::LinkedList::new();
         let entry = list.push_back(1);
-        entry.remove();
-        assert!(entry.is_removed());
+		assert!(!entry.is_removed());
         assert!(*entry == 1);
+        entry.remove();
         assert!(list.is_empty());
         assert!(list.front().is_none());
         assert!(list.back().is_none());
