@@ -4,7 +4,8 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-rcu_cell = "1"
+# rcu_cell = "1"
+rcu_cell = { path = "../rcu_cell" }
 crossbeam-utils = "0.8.20"
 
 [dev-dependencies]

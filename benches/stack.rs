@@ -344,6 +344,8 @@ mod rcu_single_list {
 }
 
 mod rcu_double_list {
+    use std::fmt::Debug;
+
     use super::Stack;
     use rcu_list::d_list::LinkedList;
 
@@ -352,7 +354,7 @@ mod rcu_double_list {
         list: LinkedList<T>,
     }
 
-    impl<T: Copy> Stack<T> for TreiberStack<T> {
+    impl<T: Copy + Debug> Stack<T> for TreiberStack<T> {
         fn new() -> TreiberStack<T> {
             TreiberStack {
                 list: LinkedList::new(),
