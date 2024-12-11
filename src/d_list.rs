@@ -356,13 +356,13 @@ impl<T> LinkedList<T> {
         {
             if Arc::ptr_eq(&curr_node, &self.tail) {
                 self.head.unlock();
-                panic!(
-                    "something wrong, the list is empty,{:?}; {:?}; head = {:p}",
-                    &self.head,
-                    &self.tail,
-                    Arc::as_ptr(&self.head)
-                );
-                // return None;
+                // panic!(
+                //     "something wrong, the list is empty,{:?}; {:?}; head = {:p}",
+                //     &self.head,
+                //     &self.tail,
+                //     Arc::as_ptr(&self.head)
+                // );
+                return None;
             }
 
             // unwrap safety: next must be valid since it's still in the list

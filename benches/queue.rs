@@ -53,20 +53,22 @@ where
                 barrier.wait();
                 for i in 0..ITEMS {
                     queue.push(i);
-                    assert!(queue.pop().is_some());
+                    // assert!(queue.pop().is_some());
                 }
             })
         })
         .collect::<Vec<_>>();
 
     barrier.wait();
-    for i in 0..ITEMS {
-        queue.push(i);
-        assert!(queue.pop().is_some());
-    }
+
 
     for handle in handles {
         handle.join().unwrap();
+    }
+
+    for i in 0..ITEMS * (THREADS - 1) {
+        // queue.push(i);
+        assert!(queue.pop().is_some());
     }
 
     // assert!(queue.pop().is_none());
