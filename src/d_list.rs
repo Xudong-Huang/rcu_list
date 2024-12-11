@@ -8,6 +8,7 @@ use core::{cmp, fmt};
 use std::fmt::Debug;
 
 #[derive(Debug)]
+#[repr(align(64))]
 struct Node<T> {
     version: AtomicUsize,
     next: RcuCell<Node<T>>,
@@ -54,7 +55,7 @@ impl<T> Node<T> {
         }
     }
 
-    #[inline]
+    // #[inline]
     fn try_lock(&self) -> Result<usize, NodeTryLockErr> {
         let version = self.version.load(Ordering::Acquire);
         // first bit means node is removed
@@ -147,31 +148,46 @@ impl<T> Node<T> {
         self.next.read().unwrap()
     }
 
-    fn lock_prev_node(self: &Arc<Self>) -> Result<Arc<Node<T>>, ()> {
+    fn lock_prev_node(self: &Arc<Self>) -> Result<Arc<Node<T>>, ()>
+    where
+        T: Debug,
+    {
+        let mut i = 0;
         loop {
             let prev_node = match self.prev_node() {
                 // something wrong, like the prev node is deleted, or the current node is deleted
-                None => continue,
+                None => {
+                    if self.is_removed() {
+                        println!(
+                            "curr_node removed, data={:?}, ptr={:p}",
+                            self.data,
+                            self.as_ref()
+                        );
+                        return Err(());
+                    }
+                    println!("curr_node, data={:?}, ptr={:p}", self.data, self.as_ref());
+                    println!("prev_node {:p} is None, already dropped", self.prev);
+                    if i > 10 {
+                        std::process::exit(1);
+                    }
+                    i += 1;
+                    continue;
+                }
 
                 // the prev can change due to prev insert/remove
                 // we will do more check later
                 Some(prev) => prev,
             };
 
-            // before lock check next is correct
-            if !prev_node.next.arc_eq(self) {
-                continue;
-            }
-
             // if the prev node is removed or locked, try again
             if prev_node.try_lock().is_err() {
                 continue;
             }
 
-            // check current prev is still valid
-            if !self.prev_eq(&prev_node) {
+            // check current node is not removed
+            if self.is_removed() {
                 prev_node.unlock();
-                continue;
+                return Err(());
             }
 
             // if the prev node is changed, try again
@@ -180,10 +196,10 @@ impl<T> Node<T> {
                 continue;
             }
 
-            // check current node is not removed
-            if self.is_removed() {
+            // check current prev is still valid
+            if !self.prev_eq(&prev_node) {
                 prev_node.unlock();
-                return Err(());
+                continue;
             }
 
             // successfully lock the prev node
@@ -195,7 +211,7 @@ impl<T> Node<T> {
 /// An entry in a `LinkedList`.
 pub struct Entry<T>(Arc<Node<T>>);
 
-impl<T> Entry<T> {
+impl<T: Debug> Entry<T> {
     /// Remove the entry from the list.
     pub fn remove(self) {
         let curr_node = &self.0;
@@ -320,6 +336,7 @@ impl<T> LinkedList<T> {
         let node = loop {
             match self.tail.prev_node() {
                 Some(node) => break node,
+                // the prev node is dropped, try again
                 None => continue,
             }
         };
@@ -330,17 +347,14 @@ impl<T> LinkedList<T> {
     /// Pushes an element to the front of the list, and returns an Entry to it.
     pub fn push_front(&self, elt: T) -> Entry<T> {
         let new_node = Arc::new(Node::new(elt));
-        // unwrap safety: head is never revmoed
-        self.head.lock().unwrap();
-        let next_node = self.head.next_node();
-
-        // new_node.lock().unwrap();
         new_node.set_prev_node(&self.head);
-        next_node.set_prev_node(&new_node);
-        new_node.next.write(next_node);
-        self.head.next.write(new_node.clone());
-
-        // new_node.unlock();
+        // unwrap safety: head is never revmoed
+        let next_node = self.head.lock().unwrap();
+        {
+            next_node.set_prev_node(&new_node);
+            new_node.next.write(next_node);
+            self.head.next.write(new_node.clone());
+        }
         self.head.unlock();
         Entry(new_node)
     }
@@ -350,32 +364,24 @@ impl<T> LinkedList<T> {
     where
         T: Debug,
     {
-        // self.tail.lock().unwrap();
         // unwrap safety: head is never revmoed
         let curr_node = self.head.lock().unwrap();
         {
+            // the list is empty
             if Arc::ptr_eq(&curr_node, &self.tail) {
                 self.head.unlock();
-                // panic!(
-                //     "something wrong, the list is empty,{:?}; {:?}; head = {:p}",
-                //     &self.head,
-                //     &self.tail,
-                //     Arc::as_ptr(&self.head)
-                // );
                 return None;
             }
 
             // unwrap safety: next must be valid since it's still in the list
             let next_node = curr_node.lock().unwrap();
-
-            // we are sure curr_node is not the tail
-            self.head.next.write(next_node.clone());
-            next_node.set_prev_node(&self.head);
-
+            {
+                self.head.next.write(next_node.clone());
+                next_node.set_prev_node(&self.head);
+            }
             curr_node.unlock_remove();
         }
         self.head.unlock();
-        // self.tail.unlock();
 
         Some(Entry(curr_node))
     }
@@ -386,35 +392,26 @@ impl<T> LinkedList<T> {
         T: Debug,
     {
         let new_node = Arc::new(Node::new(elt));
-
-        // self.tail.lock().unwrap();
-        // should always success since the tail is never removed
-        let prev_node = self.tail.lock_prev_node().unwrap();
-        // println!("prev_node = {:p}", prev_node.as_ref());
-        assert!(self.tail.prev_eq(&prev_node));
-
-        // println!("prev_node: {:x?}", prev_node.as_ref());
-        // new_node.lock().unwrap();
-        new_node.set_prev_node(&prev_node);
         new_node.next.write(self.tail.clone());
 
-        // println!("push_back: new_node = {:x?}", new_node.as_ref());
-        prev_node.next.write(new_node.clone());
-
-        core::sync::atomic::fence(Ordering::SeqCst);
-        // once we set it, next push back would lock a different node
-        self.tail.set_prev_node(&new_node);
-
-        // new_node.unlock();
-        // FIXME: here the next push back could get in!
+        // should always success since the tail is never removed
+        let prev_node = self.tail.lock_prev_node().unwrap();
+        {
+            prev_node.next.write(new_node.clone());
+            new_node.set_prev_node(&prev_node);
+            // once we set it, next push back would lock a different node
+            self.tail.set_prev_node(&new_node);
+        }
         prev_node.unlock();
-        // self.tail.unlock();
 
         Entry(new_node)
     }
 
     /// Pops the back element of the list, returns `None` if the list is empty.
-    pub fn pop_back(&self) -> Option<Entry<T>> {
+    pub fn pop_back(&self) -> Option<Entry<T>>
+    where
+        T: Debug,
+    {
         loop {
             let curr_node = match self.tail.prev_node() {
                 Some(node) => node,
@@ -432,30 +429,33 @@ impl<T> LinkedList<T> {
                 Err(_) => continue,
             };
 
-            // before lock curr_node, some thing changed, try again
-            if !curr_node.next.arc_eq(&self.tail) {
-                prev_node.unlock();
-                continue;
-            }
-
             // try lock the curr node
-            if curr_node.lock().is_err() {
-                prev_node.unlock();
-                continue;
-            }
+            let next_node = match curr_node.lock() {
+                Ok(node) => node,
+                Err(_) => {
+                    prev_node.unlock();
+                    continue;
+                }
+            };
 
             // after lock curr_node some thing changed, try again
-            if !curr_node.next.arc_eq(&self.tail) {
+            if !Arc::ptr_eq(&next_node, &self.tail) {
                 curr_node.unlock();
                 prev_node.unlock();
                 continue;
             }
 
+            prev_node.next.write(next_node);
             self.tail.set_prev_node(&prev_node);
-            prev_node.next.write(self.tail.clone());
 
             curr_node.unlock_remove();
             prev_node.unlock();
+
+            println!(
+                "pop_back, data={:?}, ptr={:p}",
+                curr_node.as_ref().data,
+                curr_node.as_ref()
+            );
 
             return Some(Entry(curr_node));
         }
@@ -574,6 +574,15 @@ mod tests {
         for i in 0..1000 {
             queue.push_back(i);
             assert!(queue.pop_front().is_some());
+        }
+    }
+
+    #[test]
+    fn test_push_front_pop_back() {
+        let queue = super::LinkedList::new();
+        for i in 0..1 {
+            queue.push_front(i);
+            assert!(queue.pop_back().is_some());
         }
     }
 }

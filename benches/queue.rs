@@ -53,7 +53,7 @@ where
                 barrier.wait();
                 for i in 0..ITEMS {
                     queue.push(i);
-                    // assert!(queue.pop().is_some());
+                    assert!(queue.pop().is_some());
                 }
             })
         })
@@ -61,13 +61,12 @@ where
 
     barrier.wait();
 
-
     for handle in handles {
         handle.join().unwrap();
     }
 
     for i in 0..ITEMS * (THREADS - 1) {
-        // queue.push(i);
+        queue.push(i);
         assert!(queue.pop().is_some());
     }
 
@@ -141,6 +140,8 @@ mod rcu_double_list {
 }
 
 mod rcu_double_list_rev {
+    use std::fmt::Debug;
+
     use super::Queue;
     use rcu_list::d_list::LinkedList;
 
@@ -149,7 +150,7 @@ mod rcu_double_list_rev {
         list: LinkedList<T>,
     }
 
-    impl<T: Copy> Queue<T> for ListQueue<T> {
+    impl<T: Copy + Debug> Queue<T> for ListQueue<T> {
         fn new() -> ListQueue<T> {
             ListQueue {
                 list: LinkedList::new(),
