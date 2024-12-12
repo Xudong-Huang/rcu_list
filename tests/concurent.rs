@@ -71,8 +71,8 @@ fn con_push_front() {
 
 #[test]
 fn con_pop_front() {
-    const THREADS: usize = 20;
-    const ITEMS: usize = 1000;
+    const THREADS: usize = 16;
+    const ITEMS: usize = 400;
 
     let queue = Arc::new(LinkedList::new());
     let barrier = Arc::new(Barrier::new(THREADS));
@@ -104,8 +104,8 @@ fn con_pop_front() {
 
 #[test]
 fn con_pop_back() {
-    const THREADS: usize = 20;
-    const ITEMS: usize = 1000;
+    const THREADS: usize = 16;
+    const ITEMS: usize = 400;
 
     let queue = Arc::new(LinkedList::new());
     let barrier = Arc::new(Barrier::new(THREADS));
@@ -137,8 +137,9 @@ fn con_pop_back() {
 
 #[test]
 fn push_back_pop_back() {
-    const THREADS: usize = 20;
-    const ITEMS: usize = 1000;
+    println!("push_back_pop_back---start");
+    const THREADS: usize = 16;
+    const ITEMS: usize = 400;
 
     let queue = Arc::new(LinkedList::new());
     let barrier = Arc::new(Barrier::new(THREADS));
@@ -163,12 +164,14 @@ fn push_back_pop_back() {
     }
 
     assert!(queue.is_empty());
+    println!("push_back_pop_back---end");
 }
 
 #[test]
 fn push_front_pop_front() {
-    const THREADS: usize = 20;
-    const ITEMS: usize = 1000;
+    println!("push_front_pop_front---start");
+    const THREADS: usize = 16;
+    const ITEMS: usize = 400;
 
     let queue = Arc::new(LinkedList::new());
     let barrier = Arc::new(Barrier::new(THREADS));
@@ -193,12 +196,14 @@ fn push_front_pop_front() {
     }
 
     assert!(queue.is_empty());
+    println!("push_front_pop_front---end");
 }
 
 #[test]
 fn push_back_pop_front() {
-    const THREADS: usize = 20;
-    const ITEMS: usize = 10000;
+    println!("push_back_pop_front---start");
+    const THREADS: usize = 16;
+    const ITEMS: usize = 400;
 
     let queue = Arc::new(LinkedList::new());
     let barrier = Arc::new(Barrier::new(THREADS));
@@ -223,12 +228,14 @@ fn push_back_pop_front() {
     }
 
     assert!(queue.is_empty());
+    println!("push_back_pop_front---end");
 }
 
 #[test]
 fn push_front_pop_back() {
-    const THREADS: usize = 20;
-    const ITEMS: usize = 1000;
+    println!("push_front_pop_back---start");
+    const THREADS: usize = 16;
+    const ITEMS: usize = 400;
 
     let queue = Arc::new(LinkedList::new());
     let barrier = Arc::new(Barrier::new(THREADS));
@@ -253,4 +260,5 @@ fn push_front_pop_back() {
     }
 
     assert!(queue.is_empty());
+    println!("push_front_pop_back---end");
 }

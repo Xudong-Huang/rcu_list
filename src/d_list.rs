@@ -5,7 +5,6 @@ use core::mem::ManuallyDrop;
 use core::ops::Deref;
 use core::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
 use core::{cmp, fmt};
-use std::fmt::Debug;
 
 #[derive(Debug)]
 #[repr(align(64))]
@@ -33,7 +32,18 @@ impl<T> Default for Node<T> {
 impl<T> Drop for Node<T> {
     fn drop(&mut self) {
         let prev = self.prev.load(Ordering::Relaxed);
-        let _ = unsafe { Weak::from_raw(prev) };
+        let _ = self._weak_from_ptr(prev);
+
+        // check normal node is removed
+        let version = self.version.load(Ordering::Relaxed);
+        if version & (1 << 63) == 0 {
+            assert!(version & 1 == 1);
+            self.version.store(0, Ordering::Relaxed);
+        }
+
+        // if we hold the node for a long time
+        // the next nodes are still referenced
+        // and when drop it could cause stack overflow!
     }
 }
 
@@ -89,6 +99,7 @@ impl<T> Node<T> {
             match self.try_lock() {
                 Ok(_) => {
                     let next_node = self.next_node();
+                    assert!(!Arc::ptr_eq(self, &next_node));
                     while !next_node.prev_eq(self) {
                         // println!("lock_self: {:p}", Arc::as_ptr(self));
                         // println!("lock_prev: {:p}", Arc::as_ptr(&next_node));
@@ -118,10 +129,16 @@ impl<T> Node<T> {
     }
 
     #[inline]
+    fn _weak_from_ptr(&self, ptr: *const Node<T>) -> Weak<Node<T>> {
+        // Safety: internal function, make sure ptr load from self.prev
+        unsafe { Weak::from_raw(ptr) }
+    }
+
+    #[inline]
     fn prev_node(&self) -> Option<Arc<Node<T>>> {
         let prev_ptr = self.prev.load(Ordering::SeqCst);
         // it may fail to upgrade if the prev node is removed
-        let prev = ManuallyDrop::new(unsafe { Weak::from_raw(prev_ptr) });
+        let prev = ManuallyDrop::new(self._weak_from_ptr(prev_ptr));
         prev.upgrade()
     }
 
@@ -135,7 +152,14 @@ impl<T> Node<T> {
         let prev_ptr = Weak::into_raw(Arc::downgrade(prev)) as *mut Node<T>;
         let _old_prev_ptr = self.prev.swap(prev_ptr, Ordering::SeqCst);
         // FIXME: don't know why
-        let _ = unsafe { Weak::from_raw(_old_prev_ptr) };
+        // let _ = self._weak_from_ptr(_old_prev_ptr);
+    }
+
+    #[inline]
+    fn clear_prev_node(&self) {
+        let prev_ptr = Weak::into_raw(Weak::<Node<T>>::new()) as *mut Node<T>;
+        let _old_prev_ptr = self.prev.swap(prev_ptr, Ordering::SeqCst);
+        let _ = self._weak_from_ptr(_old_prev_ptr);
     }
 
     #[inline]
@@ -144,10 +168,7 @@ impl<T> Node<T> {
         self.next.read().unwrap()
     }
 
-    fn lock_prev_node(self: &Arc<Self>) -> Result<Arc<Node<T>>, ()>
-    where
-        T: Debug,
-    {
+    fn lock_prev_node(self: &Arc<Self>) -> Result<Arc<Node<T>>, ()> {
         loop {
             let prev_node = match self.prev_node() {
                 // something wrong, like the prev node is deleted, or the current node is deleted
@@ -163,6 +184,7 @@ impl<T> Node<T> {
                 // we will do more check later
                 Some(prev) => prev,
             };
+            assert!(!prev_node.next.arc_eq(&prev_node));
 
             // if the prev node is removed or locked, try again
             if prev_node.try_lock().is_err() {
@@ -198,7 +220,7 @@ impl<T> Node<T> {
 /// An entry in a `LinkedList`.
 pub struct Entry<T>(Arc<Node<T>>);
 
-impl<T: Debug> Entry<T> {
+impl<T> Entry<T> {
     /// Remove the entry from the list.
     pub fn remove(self) {
         let curr_node = &self.0;
@@ -291,6 +313,13 @@ impl<T> Default for LinkedList<T> {
     }
 }
 
+impl<T> Drop for LinkedList<T> {
+    fn drop(&mut self) {
+        // avoid stack overflow
+        while self.pop_front().is_some() {}
+    }
+}
+
 impl<T> LinkedList<T> {
     /// Creates a new empty `LinkedList`.
     pub fn new() -> Self {
@@ -347,10 +376,7 @@ impl<T> LinkedList<T> {
     }
 
     /// Pops the front element of the list, returns `None` if the list is empty.
-    pub fn pop_front(&self) -> Option<Entry<T>>
-    where
-        T: Debug,
-    {
+    pub fn pop_front(&self) -> Option<Entry<T>> {
         // unwrap safety: head is never revmoed
         let curr_node = self.head.lock().unwrap();
         {
@@ -363,8 +389,9 @@ impl<T> LinkedList<T> {
             // unwrap safety: next must be valid since it's still in the list
             let next_node = curr_node.lock().unwrap();
             {
-                self.head.next.write(next_node.clone());
                 next_node.set_prev_node(&self.head);
+                curr_node.clear_prev_node();
+                self.head.next.write(next_node.clone());
             }
             curr_node.unlock_remove();
         }
@@ -374,10 +401,7 @@ impl<T> LinkedList<T> {
     }
 
     /// Pushes an element to the back of the list, and returns an Entry to it.
-    pub fn push_back(&self, elt: T) -> Entry<T>
-    where
-        T: Debug,
-    {
+    pub fn push_back(&self, elt: T) -> Entry<T> {
         let new_node = Arc::new(Node::new(elt));
         new_node.next.write(self.tail.clone());
 
@@ -395,10 +419,7 @@ impl<T> LinkedList<T> {
     }
 
     /// Pops the back element of the list, returns `None` if the list is empty.
-    pub fn pop_back(&self) -> Option<Entry<T>>
-    where
-        T: Debug,
-    {
+    pub fn pop_back(&self) -> Option<Entry<T>> {
         loop {
             let curr_node = match self.tail.prev_node() {
                 Some(node) => node,
@@ -426,6 +447,8 @@ impl<T> LinkedList<T> {
                 continue;
             }
 
+            curr_node.clear_prev_node();
+            assert!(!Arc::ptr_eq(&prev_node, &next_node));
             prev_node.next.write(next_node);
             self.tail.set_prev_node(&prev_node);
 
