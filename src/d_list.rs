@@ -34,12 +34,12 @@ impl<T> Drop for Node<T> {
         let prev = self.prev.load(Ordering::Relaxed);
         let _ = self._weak_from_ptr(prev);
 
-        // check normal node is removed
-        let version = self.version.load(Ordering::Relaxed);
-        if version & (1 << 63) == 0 {
-            assert!(version & 1 == 1);
-            self.version.store(0, Ordering::Relaxed);
-        }
+        // // check normal node is removed
+        // let version = self.version.load(Ordering::SeqCst);
+        // if version & (1 << 63) == 0 {
+        //     assert!(version & 1 == 1);
+        //     self.version.store(0, Ordering::Relaxed);
+        // }
 
         // if we hold the node for a long time
         // the next nodes are still referenced
@@ -66,7 +66,7 @@ impl<T> Node<T> {
 
     #[inline]
     fn try_lock(&self) -> Result<usize, NodeTryLockErr> {
-        let version = self.version.load(Ordering::Acquire);
+        let version = self.version.load(Ordering::Relaxed);
         // first bit means node is removed
         if version & 1 == 1 {
             // only when node is removed we return Error
@@ -82,7 +82,7 @@ impl<T> Node<T> {
         match self.version.compare_exchange_weak(
             version,
             version + 2,
-            Ordering::SeqCst,
+            Ordering::Acquire,
             Ordering::Relaxed,
         ) {
             Ok(_) => Ok(version),
@@ -99,12 +99,15 @@ impl<T> Node<T> {
             match self.try_lock() {
                 Ok(_) => {
                     let next_node = self.next_node();
-                    assert!(!Arc::ptr_eq(self, &next_node));
-                    while !next_node.prev_eq(self) {
-                        // println!("lock_self: {:p}", Arc::as_ptr(self));
-                        // println!("lock_prev: {:p}", Arc::as_ptr(&next_node));
-                        backoff.snooze();
-                    }
+                    assert!(next_node.prev_eq(self));
+                    // assert!(!Arc::ptr_eq(self, &next_node));
+                    // while !next_node.prev_eq(self) {
+                    //     println!("curr_node: {:p}", Arc::as_ptr(self));
+                    //     println!("next_node: {:p}", Arc::as_ptr(&next_node));
+                    //     println!("prev_node: {:p}", next_node.prev);
+                    //     backoff.snooze();
+                    // }
+                    // core::sync::atomic::fence(Ordering::Acquire);
                     return Ok(next_node);
                 }
                 Err(NodeTryLockErr::Locked) => backoff.snooze(),
@@ -115,17 +118,19 @@ impl<T> Node<T> {
 
     #[inline]
     fn unlock(&self) {
-        self.version.fetch_add(2, Ordering::SeqCst);
+        // core::sync::atomic::fence(Ordering::Release);
+        self.version.fetch_add(2, Ordering::Release);
     }
 
     #[inline]
     fn unlock_remove(&self) {
-        self.version.fetch_add(3, Ordering::SeqCst);
+        // core::sync::atomic::fence(Ordering::Release);
+        self.version.fetch_add(3, Ordering::Release);
     }
 
     #[inline]
     fn is_removed(&self) -> bool {
-        self.version.load(Ordering::Relaxed) & 1 == 1
+        self.version.load(Ordering::Acquire) & 1 == 1
     }
 
     #[inline]
@@ -136,7 +141,7 @@ impl<T> Node<T> {
 
     #[inline]
     fn prev_node(&self) -> Option<Arc<Node<T>>> {
-        let prev_ptr = self.prev.load(Ordering::SeqCst);
+        let prev_ptr = self.prev.load(Ordering::Acquire);
         // it may fail to upgrade if the prev node is removed
         let prev = ManuallyDrop::new(self._weak_from_ptr(prev_ptr));
         prev.upgrade()
@@ -144,15 +149,15 @@ impl<T> Node<T> {
 
     #[inline]
     fn prev_eq(&self, prev: &Arc<Node<T>>) -> bool {
-        self.prev.load(Ordering::Relaxed) == Arc::as_ptr(prev) as *mut _
+        self.prev.load(Ordering::Acquire) == Arc::as_ptr(prev) as *mut _
     }
 
     #[inline]
     fn set_prev_node(&self, prev: &Arc<Node<T>>) {
         let prev_ptr = Weak::into_raw(Arc::downgrade(prev)) as *mut Node<T>;
-        let _old_prev_ptr = self.prev.swap(prev_ptr, Ordering::SeqCst);
+        let _old_prev_ptr = self.prev.swap(prev_ptr, Ordering::Release);
         // FIXME: don't know why
-        // let _ = self._weak_from_ptr(_old_prev_ptr);
+        let _ = self._weak_from_ptr(_old_prev_ptr);
     }
 
     #[inline]
@@ -184,13 +189,13 @@ impl<T> Node<T> {
                 // we will do more check later
                 Some(prev) => prev,
             };
-            assert!(!prev_node.next.arc_eq(&prev_node));
 
-            // if the prev node is removed or locked, try again
-            if prev_node.try_lock().is_err() {
+            // if the prev node is removed, try again
+            if prev_node.lock().is_err() {
                 core::hint::spin_loop();
                 continue;
             }
+            // core::sync::atomic::fence(Ordering::Acquire);
 
             // check current node is not removed
             if self.is_removed() {
@@ -206,10 +211,10 @@ impl<T> Node<T> {
             }
 
             // should wait until the prev is setup
-            if !self.prev_eq(&prev_node) {
-                // println!("wait for prev node to be setup again");
-                core::hint::spin_loop();
-            }
+            // if !self.prev_eq(&prev_node) {
+            //     println!("wait for prev node to be setup, try again");
+            //     core::hint::spin_loop();
+            // }
 
             // successfully lock the prev node
             return Ok(prev_node);
@@ -367,9 +372,11 @@ impl<T> LinkedList<T> {
         // unwrap safety: head is never revmoed
         let next_node = self.head.lock().unwrap();
         {
+            new_node.try_lock().unwrap();
             next_node.set_prev_node(&new_node);
             new_node.next.write(next_node);
             self.head.next.write(new_node.clone());
+            new_node.unlock();
         }
         self.head.unlock();
         Entry(new_node)
@@ -388,12 +395,11 @@ impl<T> LinkedList<T> {
 
             // unwrap safety: next must be valid since it's still in the list
             let next_node = curr_node.lock().unwrap();
-            {
-                next_node.set_prev_node(&self.head);
-                curr_node.clear_prev_node();
-                self.head.next.write(next_node.clone());
-            }
             curr_node.unlock_remove();
+
+            next_node.set_prev_node(&self.head);
+            curr_node.clear_prev_node();
+            self.head.next.write(next_node.clone());
         }
         self.head.unlock();
 
@@ -403,15 +409,26 @@ impl<T> LinkedList<T> {
     /// Pushes an element to the back of the list, and returns an Entry to it.
     pub fn push_back(&self, elt: T) -> Entry<T> {
         let new_node = Arc::new(Node::new(elt));
-        new_node.next.write(self.tail.clone());
 
         // should always success since the tail is never removed
         let prev_node = self.tail.lock_prev_node().unwrap();
         {
-            prev_node.next.write(new_node.clone());
+            new_node.try_lock().unwrap();
+
+            // assert!(prev_node.next.arc_eq(&self.tail));
+            // assert!(self.tail.prev_eq(&prev_node));
+            // while !self.tail.prev_eq(&prev_node) {
+            //     println!("wait for prev node to be setup again=====");
+            //     core::hint::spin_loop();
+            // }
+
             new_node.set_prev_node(&prev_node);
+            prev_node.next.write(new_node.clone());
             // once we set it, next push back would lock a different node
             self.tail.set_prev_node(&new_node);
+            new_node.next.write(self.tail.clone());
+
+            new_node.unlock();
         }
         prev_node.unlock();
 
@@ -447,12 +464,21 @@ impl<T> LinkedList<T> {
                 continue;
             }
 
-            curr_node.clear_prev_node();
-            assert!(!Arc::ptr_eq(&prev_node, &next_node));
-            prev_node.next.write(next_node);
-            self.tail.set_prev_node(&prev_node);
+            // assert!(prev_node.next.arc_eq(&curr_node));
+            // assert!(curr_node.prev_eq(&prev_node));
+            // assert!(curr_node.next.arc_eq(&self.tail));
+            // assert!(self.tail.prev_eq(&curr_node));
 
+            // mark the curr node as removed
+            // so it won't be locked by other threads
             curr_node.unlock_remove();
+            curr_node.clear_prev_node();
+            curr_node.next.take();
+
+            assert!(self.tail.prev_eq(&curr_node));
+            self.tail.set_prev_node(&prev_node);
+            prev_node.next.write(next_node);
+
             prev_node.unlock();
 
             return Some(Entry(curr_node));

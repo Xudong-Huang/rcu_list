@@ -104,8 +104,8 @@ fn con_pop_front() {
 
 #[test]
 fn con_pop_back() {
-    const THREADS: usize = 16;
-    const ITEMS: usize = 400;
+    const THREADS: usize = 20;
+    const ITEMS: usize = 1000;
 
     let queue = Arc::new(LinkedList::new());
     let barrier = Arc::new(Barrier::new(THREADS));
