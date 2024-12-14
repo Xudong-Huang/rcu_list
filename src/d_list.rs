@@ -1,4 +1,5 @@
 use alloc::sync::{Arc, Weak};
+// use rcu_cell::arc::{Arc, Weak};
 use rcu_cell::RcuCell;
 
 use core::mem::ManuallyDrop;
@@ -31,7 +32,8 @@ impl<T> Default for Node<T> {
 
 impl<T> Drop for Node<T> {
     fn drop(&mut self) {
-        let prev = self.prev.load(Ordering::Relaxed);
+        let dummy_ptr = Weak::<Node<T>>::new().into_raw() as *mut Node<T>;
+        let prev = self.prev.swap(dummy_ptr, Ordering::Relaxed);
         let _ = self._weak_from_ptr(prev);
 
         // // check normal node is removed
@@ -82,10 +84,13 @@ impl<T> Node<T> {
         match self.version.compare_exchange(
             version,
             version + 2,
-            Ordering::Acquire,
+            Ordering::Release,
             Ordering::Relaxed,
         ) {
-            Ok(_) => Ok(version),
+            Ok(_) => {
+                core::sync::atomic::fence(Ordering::Acquire);
+                Ok(version)
+            }
             Err(v) if v & 1 == 1 => Err(NodeTryLockErr::Removed),
             Err(_) => Err(NodeTryLockErr::Locked),
         }
@@ -117,12 +122,16 @@ impl<T> Node<T> {
 
     #[inline]
     fn unlock(&self) {
-        self.version.fetch_add(2, Ordering::Release);
+        core::sync::atomic::fence(Ordering::Release);
+        let version = self.version.load(Ordering::Relaxed);
+        self.version.store(version + 2, Ordering::Release);
     }
 
     #[inline]
     fn unlock_remove(&self) {
-        self.version.fetch_add(3, Ordering::Release);
+        core::sync::atomic::fence(Ordering::Release);
+        let version = self.version.load(Ordering::Relaxed);
+        self.version.store(version + 3, Ordering::Release);
     }
 
     #[inline]
@@ -132,6 +141,7 @@ impl<T> Node<T> {
 
     #[inline]
     fn _weak_from_ptr(&self, ptr: *const Node<T>) -> Weak<Node<T>> {
+        core::sync::atomic::fence(Ordering::SeqCst);
         // Safety: internal function, make sure ptr load from self.prev
         unsafe { Weak::from_raw(ptr) }
     }
@@ -150,7 +160,8 @@ impl<T> Node<T> {
     }
 
     #[inline]
-    fn set_prev_node(&self, prev: &Arc<Node<T>>) {
+    fn set_prev_node(self: &Arc<Self>, prev: &Arc<Node<T>>) {
+        core::sync::atomic::fence(Ordering::Release);
         let prev_ptr = Weak::into_raw(Arc::downgrade(prev)) as *mut Node<T>;
         let _old_prev_ptr = self.prev.swap(prev_ptr, Ordering::Release);
         // FIXME: don't know why
@@ -159,6 +170,7 @@ impl<T> Node<T> {
 
     #[inline]
     fn clear_prev_node(&self) {
+        core::sync::atomic::fence(Ordering::Release);
         let prev_ptr = Weak::into_raw(Weak::<Node<T>>::new()) as *mut Node<T>;
         let _old_prev_ptr = self.prev.swap(prev_ptr, Ordering::Release);
         let _ = self._weak_from_ptr(_old_prev_ptr);
@@ -188,6 +200,9 @@ impl<T> Node<T> {
             };
 
             // if the prev node is removed, try again
+            // CAUTION: if we use try_lock here, it will
+            // run Weak::upgrade more frequently, and
+            // cause memory issue, still investigating
             if prev_node.lock().is_err() {
                 core::hint::spin_loop();
                 continue;
@@ -231,13 +246,14 @@ impl<T> Entry<T> {
             Err(_) => return,
         };
         // unwrap safety: the prev node is locked
-        curr_node.lock().unwrap();
+        let next_node = curr_node.lock().unwrap();
 
-        let next_node = curr_node.next_node();
         next_node.set_prev_node(&prev_node);
         prev_node.next.write(next_node);
 
         curr_node.unlock_remove();
+        curr_node.clear_prev_node();
+
         prev_node.unlock();
     }
 
@@ -365,14 +381,16 @@ impl<T> LinkedList<T> {
     /// Pushes an element to the front of the list, and returns an Entry to it.
     pub fn push_front(&self, elt: T) -> Entry<T> {
         let new_node = Arc::new(Node::new(elt));
-        new_node.set_prev_node(&self.head);
         // unwrap safety: head is never revmoed
         let next_node = self.head.lock().unwrap();
         {
             new_node.try_lock().unwrap();
+
+            new_node.set_prev_node(&self.head);
             next_node.set_prev_node(&new_node);
-            new_node.next.write(next_node);
+            new_node.next.write(next_node.clone());
             self.head.next.write(new_node.clone());
+
             new_node.unlock();
         }
         self.head.unlock();
@@ -392,14 +410,14 @@ impl<T> LinkedList<T> {
 
             // unwrap safety: next must be valid since it's still in the list
             let next_node = curr_node.lock().unwrap();
-            curr_node.unlock_remove();
 
             next_node.set_prev_node(&self.head);
-            curr_node.clear_prev_node();
             self.head.next.write(next_node.clone());
+
+            curr_node.unlock_remove();
+            curr_node.clear_prev_node();
         }
         self.head.unlock();
-
         Some(Entry(curr_node))
     }
 
@@ -419,11 +437,11 @@ impl<T> LinkedList<T> {
             //     core::hint::spin_loop();
             // }
 
-            new_node.set_prev_node(&prev_node);
-            prev_node.next.write(new_node.clone());
             // once we set it, next push back would lock a different node
+            new_node.set_prev_node(&prev_node);
             self.tail.set_prev_node(&new_node);
             new_node.next.write(self.tail.clone());
+            prev_node.next.write(new_node.clone());
 
             new_node.unlock();
         }
@@ -466,15 +484,14 @@ impl<T> LinkedList<T> {
             // assert!(curr_node.next.arc_eq(&self.tail));
             // assert!(self.tail.prev_eq(&curr_node));
 
+            self.tail.set_prev_node(&prev_node);
+            prev_node.next.write(next_node);
+
             // mark the curr node as removed
             // so it won't be locked by other threads
             curr_node.unlock_remove();
             curr_node.clear_prev_node();
             curr_node.next.take();
-
-            assert!(self.tail.prev_eq(&curr_node));
-            self.tail.set_prev_node(&prev_node);
-            prev_node.next.write(next_node);
 
             prev_node.unlock();
 

@@ -137,7 +137,6 @@ fn con_pop_back() {
 
 #[test]
 fn push_back_pop_back() {
-    println!("push_back_pop_back---start");
     const THREADS: usize = 16;
     const ITEMS: usize = 400;
 
@@ -164,12 +163,10 @@ fn push_back_pop_back() {
     }
 
     assert!(queue.is_empty());
-    println!("push_back_pop_back---end");
 }
 
 #[test]
 fn push_front_pop_front() {
-    println!("push_front_pop_front---start");
     const THREADS: usize = 16;
     const ITEMS: usize = 400;
 
@@ -196,12 +193,10 @@ fn push_front_pop_front() {
     }
 
     assert!(queue.is_empty());
-    println!("push_front_pop_front---end");
 }
 
 #[test]
 fn push_back_pop_front() {
-    println!("push_back_pop_front---start");
     const THREADS: usize = 16;
     const ITEMS: usize = 400;
 
@@ -228,12 +223,10 @@ fn push_back_pop_front() {
     }
 
     assert!(queue.is_empty());
-    println!("push_back_pop_front---end");
 }
 
 #[test]
 fn push_front_pop_back() {
-    println!("push_front_pop_back---start");
     const THREADS: usize = 16;
     const ITEMS: usize = 400;
 
@@ -260,5 +253,4 @@ fn push_front_pop_back() {
     }
 
     assert!(queue.is_empty());
-    println!("push_front_pop_back---end");
 }
