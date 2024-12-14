@@ -79,7 +79,7 @@ impl<T> Node<T> {
             return Err(NodeTryLockErr::Locked);
         }
 
-        match self.version.compare_exchange_weak(
+        match self.version.compare_exchange(
             version,
             version + 2,
             Ordering::Acquire,
@@ -107,7 +107,6 @@ impl<T> Node<T> {
                     //     println!("prev_node: {:p}", next_node.prev);
                     //     backoff.snooze();
                     // }
-                    // core::sync::atomic::fence(Ordering::Acquire);
                     return Ok(next_node);
                 }
                 Err(NodeTryLockErr::Locked) => backoff.snooze(),
@@ -118,13 +117,11 @@ impl<T> Node<T> {
 
     #[inline]
     fn unlock(&self) {
-        // core::sync::atomic::fence(Ordering::Release);
         self.version.fetch_add(2, Ordering::Release);
     }
 
     #[inline]
     fn unlock_remove(&self) {
-        // core::sync::atomic::fence(Ordering::Release);
         self.version.fetch_add(3, Ordering::Release);
     }
 
@@ -163,7 +160,7 @@ impl<T> Node<T> {
     #[inline]
     fn clear_prev_node(&self) {
         let prev_ptr = Weak::into_raw(Weak::<Node<T>>::new()) as *mut Node<T>;
-        let _old_prev_ptr = self.prev.swap(prev_ptr, Ordering::SeqCst);
+        let _old_prev_ptr = self.prev.swap(prev_ptr, Ordering::Release);
         let _ = self._weak_from_ptr(_old_prev_ptr);
     }
 
