@@ -52,7 +52,7 @@ impl<T> Drop for Node<T> {
 #[derive(Debug)]
 enum NodeTryLockErr {
     Removed,
-    Locked,
+    Retry,
 }
 
 impl<T> Node<T> {
@@ -67,32 +67,46 @@ impl<T> Node<T> {
     }
 
     #[inline]
+    fn version_generation(&self, version: usize) -> usize {
+        // valid generations are 0, 4, 8, 12...
+        if version & 2 == 0 {
+            // not locked, use current generation
+            version
+        } else {
+            // locked, use next generation to try
+            version + 2
+        }
+    }
+
+    #[inline]
     fn try_lock(&self) -> Result<usize, NodeTryLockErr> {
         let version = self.version.load(Ordering::Relaxed);
-        // first bit means node is removed
         if version & 1 == 1 {
-            // only when node is removed we return Error
-            // otherwise we should check the return value
             return Err(NodeTryLockErr::Removed);
         }
 
-        // second bit means node is locked
-        if version & 2 == 2 {
-            return Err(NodeTryLockErr::Locked);
-        }
-
+        let version = self.version_generation(version);
         match self.version.compare_exchange(
             version,
             version + 2,
             Ordering::Release,
             Ordering::Relaxed,
         ) {
-            Ok(_) => {
+            Ok(v) => {
                 core::sync::atomic::fence(Ordering::Acquire);
-                Ok(version)
+                Ok(v)
             }
-            Err(v) if v & 1 == 1 => Err(NodeTryLockErr::Removed),
-            Err(_) => Err(NodeTryLockErr::Locked),
+
+            Err(v) => {
+                if v & 1 == 1 {
+                    // first bit means node is removed
+                    Err(NodeTryLockErr::Removed)
+                } else {
+                    // second bit means node is locked
+                    // also could be version generation chnanged
+                    Err(NodeTryLockErr::Retry)
+                }
+            }
         }
     }
 
@@ -100,37 +114,48 @@ impl<T> Node<T> {
     #[inline]
     fn lock(self: &Arc<Self>) -> Result<Arc<Node<T>>, NodeTryLockErr> {
         let backoff = crossbeam_utils::Backoff::new();
-        loop {
-            match self.try_lock() {
-                Ok(_) => {
-                    let next_node = self.next_node();
-                    assert!(next_node.prev_eq(self));
-                    // assert!(!Arc::ptr_eq(self, &next_node));
-                    // while !next_node.prev_eq(self) {
-                    //     println!("curr_node: {:p}", Arc::as_ptr(self));
-                    //     println!("next_node: {:p}", Arc::as_ptr(&next_node));
-                    //     println!("prev_node: {:p}", next_node.prev);
-                    //     backoff.snooze();
-                    // }
-                    return Ok(next_node);
-                }
-                Err(NodeTryLockErr::Locked) => backoff.snooze(),
-                Err(NodeTryLockErr::Removed) => return Err(NodeTryLockErr::Removed),
-            }
+
+        let version = self.version.load(Ordering::Relaxed);
+        if version & 1 == 1 {
+            return Err(NodeTryLockErr::Removed);
         }
+
+        let mut version = self.version_generation(version);
+        while let Err(v) = self.version.compare_exchange_weak(
+            version,
+            version + 2,
+            Ordering::Release,
+            Ordering::Relaxed,
+        ) {
+            if v & 1 == 1 {
+                return Err(NodeTryLockErr::Removed);
+            }
+            version = self.version_generation(v);
+            backoff.snooze();
+        }
+
+        // version = self.version.load(Ordering::Relaxed);
+        // assert_eq!(version & 3, 2);
+
+        core::sync::atomic::fence(Ordering::Acquire);
+        let next_node = self.next_node();
+        assert!(next_node.prev_eq(self));
+        Ok(next_node)
     }
 
     #[inline]
     fn unlock(&self) {
-        core::sync::atomic::fence(Ordering::Release);
+        // core::sync::atomic::fence(Ordering::Release);
         let version = self.version.load(Ordering::Relaxed);
+        assert_eq!(version & 3, 2);
         self.version.store(version + 2, Ordering::Release);
     }
 
     #[inline]
     fn unlock_remove(&self) {
-        core::sync::atomic::fence(Ordering::Release);
+        // core::sync::atomic::fence(Ordering::Release);
         let version = self.version.load(Ordering::Relaxed);
+        assert_eq!(version & 3, 2);
         self.version.store(version + 3, Ordering::Release);
     }
 
@@ -141,7 +166,7 @@ impl<T> Node<T> {
 
     #[inline]
     fn _weak_from_ptr(&self, ptr: *const Node<T>) -> Weak<Node<T>> {
-        core::sync::atomic::fence(Ordering::SeqCst);
+        core::sync::atomic::fence(Ordering::Acquire);
         // Safety: internal function, make sure ptr load from self.prev
         unsafe { Weak::from_raw(ptr) }
     }
@@ -160,20 +185,20 @@ impl<T> Node<T> {
     }
 
     #[inline]
-    fn set_prev_node(self: &Arc<Self>, prev: &Arc<Node<T>>) {
-        core::sync::atomic::fence(Ordering::Release);
+    fn set_prev_node(&self, prev: &Arc<Node<T>>) -> Weak<Node<T>> {
+        // core::sync::atomic::fence(Ordering::Release);
         let prev_ptr = Weak::into_raw(Arc::downgrade(prev)) as *mut Node<T>;
         let _old_prev_ptr = self.prev.swap(prev_ptr, Ordering::Release);
         // FIXME: don't know why
-        let _ = self._weak_from_ptr(_old_prev_ptr);
+        self._weak_from_ptr(_old_prev_ptr)
     }
 
     #[inline]
-    fn clear_prev_node(&self) {
-        core::sync::atomic::fence(Ordering::Release);
+    fn clear_prev_node(&self) -> Weak<Node<T>> {
+        // core::sync::atomic::fence(Ordering::Release);
         let prev_ptr = Weak::into_raw(Weak::<Node<T>>::new()) as *mut Node<T>;
         let _old_prev_ptr = self.prev.swap(prev_ptr, Ordering::Release);
-        let _ = self._weak_from_ptr(_old_prev_ptr);
+        self._weak_from_ptr(_old_prev_ptr)
     }
 
     #[inline]
@@ -185,7 +210,8 @@ impl<T> Node<T> {
     fn lock_prev_node(self: &Arc<Self>) -> Result<Arc<Node<T>>, ()> {
         loop {
             let prev_node = match self.prev_node() {
-                // something wrong, like the prev node is deleted, or the current node is deleted
+                // something wrong, like the prev node is deleted,
+                // or the current node is deleted
                 None => {
                     if self.is_removed() {
                         return Err(());
@@ -203,7 +229,7 @@ impl<T> Node<T> {
             // CAUTION: if we use try_lock here, it will
             // run Weak::upgrade more frequently, and
             // cause memory issue, still investigating
-            if prev_node.lock().is_err() {
+            if prev_node.try_lock().is_err() {
                 core::hint::spin_loop();
                 continue;
             }
@@ -222,6 +248,7 @@ impl<T> Node<T> {
                 continue;
             }
 
+            assert!(self.prev_eq(&prev_node));
             // should wait until the prev is setup
             // if !self.prev_eq(&prev_node) {
             //     println!("wait for prev node to be setup, try again");
@@ -381,15 +408,17 @@ impl<T> LinkedList<T> {
     /// Pushes an element to the front of the list, and returns an Entry to it.
     pub fn push_front(&self, elt: T) -> Entry<T> {
         let new_node = Arc::new(Node::new(elt));
-        // unwrap safety: head is never revmoed
+        new_node.set_prev_node(&self.head);
+        // unwrap safety: head is never removed
         let next_node = self.head.lock().unwrap();
         {
             new_node.try_lock().unwrap();
 
-            new_node.set_prev_node(&self.head);
-            next_node.set_prev_node(&new_node);
+            let old_prev = next_node.set_prev_node(&new_node);
+            assert_eq!(Weak::as_ptr(&old_prev), Arc::as_ptr(&self.head));
             new_node.next.write(next_node.clone());
-            self.head.next.write(new_node.clone());
+            let old_next = self.head.next.write(new_node.clone()).unwrap();
+            assert!(Arc::ptr_eq(&old_next, &next_node));
 
             new_node.unlock();
         }
@@ -416,6 +445,7 @@ impl<T> LinkedList<T> {
 
             curr_node.unlock_remove();
             curr_node.clear_prev_node();
+            // curr_node.next.take();
         }
         self.head.unlock();
         Some(Entry(curr_node))
@@ -428,17 +458,11 @@ impl<T> LinkedList<T> {
         // should always success since the tail is never removed
         let prev_node = self.tail.lock_prev_node().unwrap();
         {
-            new_node.try_lock().unwrap();
-
-            // assert!(prev_node.next.arc_eq(&self.tail));
-            // assert!(self.tail.prev_eq(&prev_node));
-            // while !self.tail.prev_eq(&prev_node) {
-            //     println!("wait for prev node to be setup again=====");
-            //     core::hint::spin_loop();
-            // }
-
             // once we set it, next push back would lock a different node
             new_node.set_prev_node(&prev_node);
+
+            new_node.try_lock().unwrap();
+
             self.tail.set_prev_node(&new_node);
             new_node.next.write(self.tail.clone());
             prev_node.next.write(new_node.clone());
@@ -479,19 +503,17 @@ impl<T> LinkedList<T> {
                 continue;
             }
 
-            // assert!(prev_node.next.arc_eq(&curr_node));
-            // assert!(curr_node.prev_eq(&prev_node));
-            // assert!(curr_node.next.arc_eq(&self.tail));
-            // assert!(self.tail.prev_eq(&curr_node));
-
-            self.tail.set_prev_node(&prev_node);
-            prev_node.next.write(next_node);
+            let old_prev1 = self.tail.set_prev_node(&prev_node);
+            assert_eq!(Weak::as_ptr(&old_prev1), Arc::as_ptr(&curr_node));
+            let old_next = prev_node.next.write(next_node).unwrap();
+            assert!(Arc::ptr_eq(&old_next, &curr_node));
 
             // mark the curr node as removed
             // so it won't be locked by other threads
             curr_node.unlock_remove();
-            curr_node.clear_prev_node();
-            curr_node.next.take();
+            let old_prev2 = curr_node.clear_prev_node();
+            assert_eq!(Weak::as_ptr(&old_prev2), Arc::as_ptr(&prev_node));
+            assert!(Arc::ptr_eq(&curr_node.next.take().unwrap(), &self.tail));
 
             prev_node.unlock();
 
