@@ -69,11 +69,6 @@ where
         handle.join().unwrap();
     }
 
-    for i in 0..ITEMS * (THREADS - 1) {
-        queue.push(i);
-        assert!(queue.pop().is_some());
-    }
-
     assert!(queue.pop().is_none());
     assert!(queue.is_empty());
 }

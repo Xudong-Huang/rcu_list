@@ -86,7 +86,7 @@ impl<T> Node<T> {
         }
     }
 
-    // lock the current node and return the it's next node
+    // lock the current node and return it's next node
     #[inline]
     fn lock(self: &Arc<Self>) -> Result<Arc<Node<T>>, NodeTryLockErr> {
         let backoff = crossbeam_utils::Backoff::new();
@@ -393,10 +393,12 @@ impl<T> LinkedList<T> {
             }
             curr_node.unlock_remove();
             curr_node.clear_prev_node();
-            // don't clear the next field, could break the iterator
-            // curr_node.next.take();
         }
         self.head.unlock();
+
+        // don't clear the next field, could break the iterator
+        // curr_node.next.take();
+
         Some(Entry(curr_node))
     }
 
@@ -440,11 +442,10 @@ impl<T> LinkedList<T> {
                 Ok(node) => node,
                 Err(_) => continue,
             };
+
             {
                 // lock the curr node
                 let next_node = curr_node.lock().unwrap();
-
-                // get into the locks
                 {
                     // after lock curr_node some thing changed, try again
                     if !Arc::ptr_eq(&next_node, &self.tail) {
@@ -456,15 +457,13 @@ impl<T> LinkedList<T> {
                     self.tail.set_prev_node(&prev_node);
                     prev_node.next.write(next_node).unwrap();
                 }
-
-                // mark the curr node as removed
-                // so it won't be locked by other threads
                 curr_node.unlock_remove();
                 curr_node.clear_prev_node();
-                // since we are pop from back, the next could be released
-                curr_node.next.take();
             }
             prev_node.unlock();
+
+            // since we are pop from back, the next could be released
+            curr_node.next.take();
 
             return Some(Entry(curr_node));
         }
