@@ -7,31 +7,31 @@ There are two types of linked list: `SignleLinkedList` and `DoubleLinkedList`.
 ## SingleLinkedList
 The `SingleLinkedList` supports the following operations:
 
-- front: Get the head entry of list.
-- back: Get the tail entry of list.
-- push_front: Insert a new element into the head of list.
-- pop_front: Remove the element from the head of list.
-- push_back: Insert a new element into the tail of list.
-- iter: Iterate over the list.
+- `front`: Get the head entry of list.
+- `back`: Get the tail entry of list.
+- `push_front`: Insert a new element into the head of list.
+- `pop_front`: Remove the element from the head of list.
+- `push_back`: Insert a new element into the tail of list.
+- `iter`: Iterate over the list.
 
 each `Entry` that returned by instert operations could do the following operations:
-- deref: Read the value of the current element.
+- `deref`: Read the value of the current element.
 
 ## DoubleLinkedList
 The `DoubleLinkedList` supports the following operations:
 
-- front: Get the head entry of list.
-- back: Get the tail entry of list.
-- push_front: Insert a new element into the head of list.
-- pop_front: Remove the element from the head of list.
-- push_back: Insert a new element into the tail of list.
-- pop_back: Remove the element from the tail of list.
-- iter: Iterate over the list.
+- `front`: Get the head entry of list.
+- `back`: Get the tail entry of list.
+- `push_front`: Insert a new element into the head of list.
+- `pop_front`: Remove the element from the head of list.
+- `push_back`: Insert a new element into the tail of list.
+- `pop_back`: Remove the element from the tail of list.
+- `iter`: Iterate over the list.
 
 each `Entry` that returned by instert operations could do the following operations:
-- remove: Remove the current element from the list.
-- insert_after: Insert an element after the entry.
-- deref: Read the value of the current element.
+- `remove`: Remove the current element from the list.
+- `insert_after`: Insert an element after the entry.
+- `deref`: Read the value of the current element.
 
 
 ### Note
