@@ -6,6 +6,12 @@ use core::sync::atomic::{AtomicUsize, Ordering};
 use core::{cmp, fmt};
 
 #[derive(Debug)]
+enum NodeTryLockErr {
+    Removed,
+    Retry,
+}
+
+#[derive(Debug)]
 #[repr(align(64))]
 struct Node<T> {
     version: AtomicUsize,
@@ -26,12 +32,6 @@ impl<T> Default for Node<T> {
     }
 }
 
-#[derive(Debug)]
-enum NodeTryLockErr {
-    Removed,
-    Retry,
-}
-
 impl<T> Node<T> {
     #[inline]
     fn new(data: T) -> Self {
@@ -45,6 +45,8 @@ impl<T> Node<T> {
 
     #[inline]
     fn version_generation(&self, version: usize) -> usize {
+        // first bit means node is removed
+        // second bit means node is locked
         // valid generations are 0, 4, 8, 12...
         if version & 2 == 0 {
             // not locked, use current generation
@@ -76,11 +78,8 @@ impl<T> Node<T> {
 
             Err(v) => {
                 if v & 1 == 1 {
-                    // first bit means node is removed
                     Err(NodeTryLockErr::Removed)
                 } else {
-                    // second bit means node is locked
-                    // also could be version generation chnanged
                     Err(NodeTryLockErr::Retry)
                 }
             }
@@ -120,26 +119,18 @@ impl<T> Node<T> {
     #[inline]
     fn unlock(&self) {
         let version = self.version.load(Ordering::Relaxed);
-        assert_eq!(version & 3, 2);
         self.version.store(version + 2, Ordering::Release);
     }
 
     #[inline]
     fn unlock_remove(&self) {
         let version = self.version.load(Ordering::Relaxed);
-        assert_eq!(version & 3, 2);
         self.version.store(version + 3, Ordering::Release);
     }
 
     #[inline]
     fn is_removed(&self) -> bool {
-        self.version.load(Ordering::Acquire) & 1 == 1
-    }
-
-    #[inline]
-    fn _weak_from_ptr(&self, ptr: *const Node<T>) -> Weak<Node<T>> {
-        // Safety: internal function, make sure ptr load from self.prev
-        unsafe { Weak::from_raw(ptr) }
+        self.version.load(Ordering::Relaxed) & 1 == 1
     }
 
     #[inline]
@@ -171,8 +162,8 @@ impl<T> Node<T> {
     fn lock_prev_node(self: &Arc<Self>) -> Result<Arc<Node<T>>, ()> {
         loop {
             let prev_node = match self.prev_node() {
-                // something wrong, like the prev node is deleted,
-                // or the current node is deleted
+                // something wrong, like the prev node is dropped,
+                // or the current node is removed
                 None => {
                     if self.is_removed() {
                         return Err(());
@@ -188,7 +179,6 @@ impl<T> Node<T> {
 
             // if the prev node is removed, try again
             if prev_node.lock().is_err() {
-                core::hint::spin_loop();
                 continue;
             }
 
@@ -206,11 +196,6 @@ impl<T> Node<T> {
             }
 
             assert!(self.prev_eq(&prev_node));
-            // should wait until the prev is setup
-            // if !self.prev_eq(&prev_node) {
-            //     println!("wait for prev node to be setup, try again");
-            //     core::hint::spin_loop();
-            // }
 
             // successfully lock the prev node
             return Ok(prev_node);
@@ -227,17 +212,19 @@ impl<T> Entry<T> {
         let curr_node = &self.0;
         let prev_node = match curr_node.lock_prev_node() {
             Ok(node) => node,
+            // the current node is already removed
             Err(_) => return,
         };
-        // unwrap safety: the prev node is locked
-        let next_node = curr_node.lock().unwrap();
-
-        next_node.set_prev_node(&prev_node);
-        prev_node.next.write(next_node);
-
-        curr_node.unlock_remove();
-        curr_node.clear_prev_node();
-
+        {
+            // unwrap safety: the prev node is locked
+            let next_node = curr_node.lock().unwrap();
+            {
+                next_node.set_prev_node(&prev_node);
+                prev_node.next.write(next_node);
+            }
+            curr_node.unlock_remove();
+            curr_node.clear_prev_node();
+        }
         prev_node.unlock();
     }
 
@@ -303,6 +290,8 @@ impl<T: Ord> Ord for Entry<T> {
 impl<T: Eq> Eq for Entry<T> {}
 
 /// A concurrent doubly linked list.
+/// Internally it use fine-grained double locks to ensure thread safety.
+/// The readers like `iter`, `front` and `back` don't need to get locks.
 #[derive(Debug)]
 pub struct LinkedList<T> {
     head: Arc<Node<T>>,
@@ -336,11 +325,13 @@ impl<T> LinkedList<T> {
     }
 
     /// Returns true if the list is empty.
+    #[inline]
     pub fn is_empty(&self) -> bool {
         self.head.next.arc_eq(&self.tail)
     }
 
     /// Returns an Entry to the front element, or `None` if the list is empty.
+    #[inline]
     pub fn front(&self) -> Option<Entry<T>> {
         // head.next is always non empty
         let node = self.head.next_node();
@@ -349,12 +340,14 @@ impl<T> LinkedList<T> {
     }
 
     /// Returns an Entry to the back element, or `None` if the list is empty.
+    #[inline]
     pub fn back(&self) -> Option<Entry<T>> {
         // tail.prev is always non empty
         let node = loop {
             match self.tail.prev_node() {
                 Some(node) => break node,
-                // the prev node is dropped, try again
+                // the prev node is dropped
+                // try again for a valid prev node
                 None => continue,
             }
         };
@@ -370,13 +363,11 @@ impl<T> LinkedList<T> {
         let next_node = self.head.lock().unwrap();
         {
             new_node.try_lock().unwrap();
-
-            let old_prev = next_node.set_prev_node(&new_node);
-            assert_eq!(Weak::as_ptr(&old_prev), Arc::as_ptr(&self.head));
-            new_node.next.write(next_node.clone());
-            let old_next = self.head.next.write(new_node.clone()).unwrap();
-            assert!(Arc::ptr_eq(&old_next, &next_node));
-
+            {
+                next_node.set_prev_node(&new_node);
+                new_node.next.write(next_node.clone());
+                self.head.next.write(new_node.clone());
+            }
             new_node.unlock();
         }
         self.head.unlock();
@@ -396,12 +387,13 @@ impl<T> LinkedList<T> {
 
             // unwrap safety: next must be valid since it's still in the list
             let next_node = curr_node.lock().unwrap();
-
-            next_node.set_prev_node(&self.head);
-            self.head.next.write(next_node.clone());
-
+            {
+                next_node.set_prev_node(&self.head);
+                self.head.next.write(next_node.clone());
+            }
             curr_node.unlock_remove();
             curr_node.clear_prev_node();
+            // don't clear the next field, could break the iterator
             // curr_node.next.take();
         }
         self.head.unlock();
@@ -415,15 +407,14 @@ impl<T> LinkedList<T> {
         // should always success since the tail is never removed
         let prev_node = self.tail.lock_prev_node().unwrap();
         {
-            // once we set it, next push back would lock a different node
             new_node.set_prev_node(&prev_node);
 
             new_node.try_lock().unwrap();
-
-            self.tail.set_prev_node(&new_node);
-            new_node.next.write(self.tail.clone());
-            prev_node.next.write(new_node.clone());
-
+            {
+                self.tail.set_prev_node(&new_node);
+                new_node.next.write(self.tail.clone());
+                prev_node.next.write(new_node.clone());
+            }
             new_node.unlock();
         }
         prev_node.unlock();
@@ -449,29 +440,30 @@ impl<T> LinkedList<T> {
                 Ok(node) => node,
                 Err(_) => continue,
             };
+            {
+                // lock the curr node
+                let next_node = curr_node.lock().unwrap();
 
-            // lock the curr node
-            let next_node = curr_node.lock().unwrap();
+                // get into the locks
+                {
+                    // after lock curr_node some thing changed, try again
+                    if !Arc::ptr_eq(&next_node, &self.tail) {
+                        curr_node.unlock();
+                        prev_node.unlock();
+                        continue;
+                    }
 
-            // after lock curr_node some thing changed, try again
-            if !Arc::ptr_eq(&next_node, &self.tail) {
-                curr_node.unlock();
-                prev_node.unlock();
-                continue;
+                    self.tail.set_prev_node(&prev_node);
+                    prev_node.next.write(next_node).unwrap();
+                }
+
+                // mark the curr node as removed
+                // so it won't be locked by other threads
+                curr_node.unlock_remove();
+                curr_node.clear_prev_node();
+                // since we are pop from back, the next could be released
+                curr_node.next.take();
             }
-
-            let old_prev1 = self.tail.set_prev_node(&prev_node);
-            assert_eq!(Weak::as_ptr(&old_prev1), Arc::as_ptr(&curr_node));
-            let old_next = prev_node.next.write(next_node).unwrap();
-            assert!(Arc::ptr_eq(&old_next, &curr_node));
-
-            // mark the curr node as removed
-            // so it won't be locked by other threads
-            curr_node.unlock_remove();
-            let old_prev2 = curr_node.clear_prev_node();
-            assert_eq!(Weak::as_ptr(&old_prev2), Arc::as_ptr(&prev_node));
-            assert!(Arc::ptr_eq(&curr_node.next.take().unwrap(), &self.tail));
-
             prev_node.unlock();
 
             return Some(Entry(curr_node));
@@ -479,6 +471,7 @@ impl<T> LinkedList<T> {
     }
 
     /// Returns an iterator over the elements of the list.
+    #[inline]
     pub fn iter(&self) -> Iter<T> {
         Iter {
             tail: &self.tail,
@@ -592,6 +585,7 @@ mod tests {
             queue.push_back(i);
             assert!(queue.pop_front().is_some());
         }
+        assert!(queue.is_empty());
     }
 
     #[test]
@@ -601,5 +595,6 @@ mod tests {
             queue.push_front(i);
             assert!(queue.pop_back().is_some());
         }
+        assert!(queue.is_empty());
     }
 }
