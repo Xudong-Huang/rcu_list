@@ -642,22 +642,51 @@ mod tests {
     }
 
     #[test]
-    fn test_push_back_pop_front() {
-        let queue = super::LinkedList::new();
-        for i in 0..1000 {
-            queue.push_back(i);
-            assert!(queue.pop_front().is_some());
-        }
-        assert!(queue.is_empty());
+    fn entry_remove() {
+        let list = super::LinkedList::new();
+        list.push_back(1);
+        let entry = list.push_back(2);
+        list.push_back(3);
+
+        entry.remove();
+
+        let mut iter = list.iter();
+        assert_eq!(*iter.next().unwrap(), 1);
+        assert_eq!(*iter.next().unwrap(), 3);
+        assert!(iter.next().is_none());
     }
 
     #[test]
-    fn test_push_front_pop_back() {
-        let queue = super::LinkedList::new();
-        for i in 0..1 {
-            queue.push_front(i);
-            assert!(queue.pop_back().is_some());
-        }
-        assert!(queue.is_empty());
+    fn entry_insert_after() {
+        let list = super::LinkedList::new();
+        list.push_back(1);
+        let entry = list.push_back(2);
+        list.push_back(3);
+
+        entry.insert_after(100).unwrap();
+
+        let mut iter = list.iter();
+        assert_eq!(*iter.next().unwrap(), 1);
+        assert_eq!(*iter.next().unwrap(), 2);
+        assert_eq!(*iter.next().unwrap(), 100);
+        assert_eq!(*iter.next().unwrap(), 3);
+        assert!(iter.next().is_none());
+    }
+
+    #[test]
+    fn entry_insert_after_remove() {
+        let list = super::LinkedList::new();
+        list.push_back(1);
+        let entry = list.push_back(2);
+        list.push_back(3);
+
+        assert_eq!(*entry.insert_after(100).unwrap(), 100);
+
+        let mut iter = list.iter();
+        let find_entry = iter.find(|e| **e == 2).unwrap();
+        find_entry.remove();
+
+        assert!(entry.is_removed());
+        assert_eq!(entry.insert_after(101), Err(101));
     }
 }
