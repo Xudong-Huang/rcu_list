@@ -30,6 +30,7 @@ The `DoubleLinkedList` supports the following operations:
 
 each `Entry` that returned by instert operations could do the following operations:
 - remove: Remove the current element from the list.
+- insert_after: Insert an element after the entry.
 - deref: Read the value of the current element.
 
 

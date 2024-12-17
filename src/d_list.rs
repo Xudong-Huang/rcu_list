@@ -228,6 +228,41 @@ impl<T> Entry<T> {
         prev_node.unlock();
     }
 
+    /// insert an element after the entry.
+    /// if the entry was removed, the element will be returned in Err()
+    pub fn insert_after(&self, elt: T) -> Result<Entry<T>, T> {
+        let new_node = Arc::new(Node::new(elt));
+        new_node.set_prev_node(&self.0);
+
+        // move the drop out of locks
+        let old_next_prev;
+        let old_head_next;
+
+        // unwrap safety: head is never removed
+        let next_node = match self.0.lock() {
+            Ok(node) => node,
+            Err(_) => {
+                let n = Arc::into_inner(new_node).unwrap();
+                return Err(n.data.unwrap());
+            }
+        };
+        {
+            new_node.try_lock().unwrap();
+            {
+                old_next_prev = next_node.set_prev_node(&new_node);
+                new_node.next.write(next_node.clone());
+                old_head_next = self.0.next.write(new_node.clone());
+            }
+            new_node.unlock();
+        }
+        self.0.unlock();
+
+        drop(old_next_prev);
+        drop(old_head_next);
+
+        Ok(Entry(new_node))
+    }
+
     /// Returns true if the entry is removed.
     pub fn is_removed(&self) -> bool {
         self.0.is_removed()
