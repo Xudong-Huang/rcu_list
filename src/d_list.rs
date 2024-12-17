@@ -689,4 +689,30 @@ mod tests {
         assert!(entry.is_removed());
         assert_eq!(entry.insert_after(101), Err(101));
     }
+
+    #[test]
+    fn simple_drop() {
+        use core::sync::atomic::{AtomicUsize, Ordering};
+
+        static REF: AtomicUsize = AtomicUsize::new(0);
+        struct Foo(usize);
+        impl Foo {
+            fn new(data: usize) -> Self {
+                Foo(data)
+            }
+        }
+        impl Drop for Foo {
+            fn drop(&mut self) {
+                REF.fetch_add(self.0, Ordering::Relaxed);
+            }
+        }
+        let list = super::LinkedList::new();
+
+        for i in 0..100 {
+            list.push_back(Foo::new(i));
+        }
+
+        drop(list);
+        assert_eq!(REF.load(Ordering::Relaxed), (0..100).sum());
+    }
 }
