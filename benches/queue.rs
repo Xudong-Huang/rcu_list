@@ -60,6 +60,10 @@ where
         .collect::<Vec<_>>();
 
     barrier.wait();
+    for i in 0..ITEMS {
+        queue.push(i);
+        assert!(queue.pop().is_some());
+    }
 
     for handle in handles {
         handle.join().unwrap();
@@ -70,7 +74,7 @@ where
         assert!(queue.pop().is_some());
     }
 
-    // assert!(queue.pop().is_none());
+    assert!(queue.pop().is_none());
     assert!(queue.is_empty());
 }
 

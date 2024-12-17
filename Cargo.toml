@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-rcu_cell = { git = "https://github.com/Xudong-Huang/rcu_cell.git" }
+rcu_cell = "1.1.6"
 crossbeam-utils = "0.8.20"
 
 [dev-dependencies]
