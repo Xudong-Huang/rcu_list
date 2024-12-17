@@ -359,23 +359,36 @@ impl<T> LinkedList<T> {
     pub fn push_front(&self, elt: T) -> Entry<T> {
         let new_node = Arc::new(Node::new(elt));
         new_node.set_prev_node(&self.head);
+
+        // move the drop out of locks
+        let old_next_prev;
+        let old_head_next;
+
         // unwrap safety: head is never removed
         let next_node = self.head.lock().unwrap();
         {
             new_node.try_lock().unwrap();
             {
-                next_node.set_prev_node(&new_node);
+                old_next_prev = next_node.set_prev_node(&new_node);
                 new_node.next.write(next_node.clone());
-                self.head.next.write(new_node.clone());
+                old_head_next = self.head.next.write(new_node.clone());
             }
             new_node.unlock();
         }
         self.head.unlock();
+
+        drop(old_next_prev);
+        drop(old_head_next);
+
         Entry(new_node)
     }
 
     /// Pops the front element of the list, returns `None` if the list is empty.
     pub fn pop_front(&self) -> Option<Entry<T>> {
+        // move the drop out of locks
+        let old_next_prev;
+        let old_head_next;
+
         // unwrap safety: head is never revmoed
         let curr_node = self.head.lock().unwrap();
         {
@@ -388,8 +401,8 @@ impl<T> LinkedList<T> {
             // unwrap safety: next must be valid since it's still in the list
             let next_node = curr_node.lock().unwrap();
             {
-                next_node.set_prev_node(&self.head);
-                self.head.next.write(next_node.clone());
+                old_next_prev = next_node.set_prev_node(&self.head);
+                old_head_next = self.head.next.write(next_node.clone());
             }
             curr_node.unlock_remove();
             curr_node.clear_prev_node();
@@ -398,6 +411,8 @@ impl<T> LinkedList<T> {
 
         // don't clear the next field, could break the iterator
         // curr_node.next.take();
+        drop(old_next_prev);
+        drop(old_head_next);
 
         Some(Entry(curr_node))
     }
@@ -406,6 +421,10 @@ impl<T> LinkedList<T> {
     pub fn push_back(&self, elt: T) -> Entry<T> {
         let new_node = Arc::new(Node::new(elt));
 
+        // move the drop out of locks
+        let old_tail_prev;
+        let old_prev_next;
+
         // should always success since the tail is never removed
         let prev_node = self.tail.lock_prev_node().unwrap();
         {
@@ -413,13 +432,16 @@ impl<T> LinkedList<T> {
 
             new_node.try_lock().unwrap();
             {
-                self.tail.set_prev_node(&new_node);
+                old_tail_prev = self.tail.set_prev_node(&new_node);
                 new_node.next.write(self.tail.clone());
-                prev_node.next.write(new_node.clone());
+                old_prev_next = prev_node.next.write(new_node.clone());
             }
             new_node.unlock();
         }
         prev_node.unlock();
+
+        drop(old_tail_prev);
+        drop(old_prev_next);
 
         Entry(new_node)
     }
@@ -427,6 +449,10 @@ impl<T> LinkedList<T> {
     /// Pops the back element of the list, returns `None` if the list is empty.
     pub fn pop_back(&self) -> Option<Entry<T>> {
         loop {
+            // move the drop out of locks
+            let old_tail_prev;
+            let old_prev_next;
+
             let curr_node = match self.tail.prev_node() {
                 Some(node) => node,
                 None => continue,
@@ -454,8 +480,8 @@ impl<T> LinkedList<T> {
                         continue;
                     }
 
-                    self.tail.set_prev_node(&prev_node);
-                    prev_node.next.write(next_node).unwrap();
+                    old_tail_prev = self.tail.set_prev_node(&prev_node);
+                    old_prev_next = prev_node.next.write(next_node).unwrap();
                 }
                 curr_node.unlock_remove();
                 curr_node.clear_prev_node();
@@ -464,6 +490,9 @@ impl<T> LinkedList<T> {
 
             // since we are pop from back, the next could be released
             curr_node.next.take();
+
+            drop(old_tail_prev);
+            drop(old_prev_next);
 
             return Some(Entry(curr_node));
         }
