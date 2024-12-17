@@ -238,10 +238,10 @@ impl<T> Entry<T> {
         let old_next_prev;
         let old_head_next;
 
-        // unwrap safety: head is never removed
         let next_node = match self.0.lock() {
             Ok(node) => node,
             Err(_) => {
+                // current entry removed, can't insert
                 let n = Arc::into_inner(new_node).unwrap();
                 return Err(n.data.unwrap());
             }
