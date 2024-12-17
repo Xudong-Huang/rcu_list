@@ -1,10 +1,8 @@
 use alloc::sync::{Arc, Weak};
-// use rcu_cell::arc::{Arc, Weak};
-use rcu_cell::RcuCell;
+use rcu_cell::{RcuCell, RcuWeak};
 
-use core::mem::ManuallyDrop;
 use core::ops::Deref;
-use core::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicUsize, Ordering};
 use core::{cmp, fmt};
 
 #[derive(Debug)]
@@ -12,9 +10,7 @@ use core::{cmp, fmt};
 struct Node<T> {
     version: AtomicUsize,
     next: RcuCell<Node<T>>,
-    // this is actually Weak<Node<T>>, but we can't use Weak in atomic
-    // we use Weak to avoid reference cycles
-    prev: AtomicPtr<Node<T>>,
+    prev: RcuWeak<Node<T>>,
     // only the head node has None data
     data: Option<T>,
 }
@@ -23,29 +19,10 @@ impl<T> Default for Node<T> {
     fn default() -> Self {
         Node {
             version: AtomicUsize::new(1 << 63),
-            prev: AtomicPtr::new(Weak::<Node<T>>::new().into_raw() as *mut Node<T>),
+            prev: RcuWeak::new(),
             next: RcuCell::none(),
             data: None,
         }
-    }
-}
-
-impl<T> Drop for Node<T> {
-    fn drop(&mut self) {
-        let dummy_ptr = Weak::<Node<T>>::new().into_raw() as *mut Node<T>;
-        let prev = self.prev.swap(dummy_ptr, Ordering::Relaxed);
-        let _ = self._weak_from_ptr(prev);
-
-        // // check normal node is removed
-        // let version = self.version.load(Ordering::SeqCst);
-        // if version & (1 << 63) == 0 {
-        //     assert!(version & 1 == 1);
-        //     self.version.store(0, Ordering::Relaxed);
-        // }
-
-        // if we hold the node for a long time
-        // the next nodes are still referenced
-        // and when drop it could cause stack overflow!
     }
 }
 
@@ -60,7 +37,7 @@ impl<T> Node<T> {
     fn new(data: T) -> Self {
         Node {
             version: AtomicUsize::new(0),
-            prev: AtomicPtr::new(Weak::<Node<T>>::new().into_raw() as *mut Node<T>),
+            prev: RcuWeak::new(),
             next: RcuCell::none(),
             data: Some(data),
         }
@@ -134,9 +111,6 @@ impl<T> Node<T> {
             backoff.snooze();
         }
 
-        // version = self.version.load(Ordering::Relaxed);
-        // assert_eq!(version & 3, 2);
-
         core::sync::atomic::fence(Ordering::Acquire);
         let next_node = self.next_node();
         assert!(next_node.prev_eq(self));
@@ -145,7 +119,6 @@ impl<T> Node<T> {
 
     #[inline]
     fn unlock(&self) {
-        // core::sync::atomic::fence(Ordering::Release);
         let version = self.version.load(Ordering::Relaxed);
         assert_eq!(version & 3, 2);
         self.version.store(version + 2, Ordering::Release);
@@ -153,7 +126,6 @@ impl<T> Node<T> {
 
     #[inline]
     fn unlock_remove(&self) {
-        // core::sync::atomic::fence(Ordering::Release);
         let version = self.version.load(Ordering::Relaxed);
         assert_eq!(version & 3, 2);
         self.version.store(version + 3, Ordering::Release);
@@ -166,39 +138,28 @@ impl<T> Node<T> {
 
     #[inline]
     fn _weak_from_ptr(&self, ptr: *const Node<T>) -> Weak<Node<T>> {
-        core::sync::atomic::fence(Ordering::Acquire);
         // Safety: internal function, make sure ptr load from self.prev
         unsafe { Weak::from_raw(ptr) }
     }
 
     #[inline]
     fn prev_node(&self) -> Option<Arc<Node<T>>> {
-        let prev_ptr = self.prev.load(Ordering::Acquire);
-        // it may fail to upgrade if the prev node is removed
-        let prev = ManuallyDrop::new(self._weak_from_ptr(prev_ptr));
-        prev.upgrade()
+        self.prev.upgrade()
     }
 
     #[inline]
     fn prev_eq(&self, prev: &Arc<Node<T>>) -> bool {
-        self.prev.load(Ordering::Acquire) == Arc::as_ptr(prev) as *mut _
+        self.prev.arc_eq(prev)
     }
 
     #[inline]
     fn set_prev_node(&self, prev: &Arc<Node<T>>) -> Weak<Node<T>> {
-        // core::sync::atomic::fence(Ordering::Release);
-        let prev_ptr = Weak::into_raw(Arc::downgrade(prev)) as *mut Node<T>;
-        let _old_prev_ptr = self.prev.swap(prev_ptr, Ordering::Release);
-        // FIXME: don't know why
-        self._weak_from_ptr(_old_prev_ptr)
+        self.prev.write_arc(prev)
     }
 
     #[inline]
     fn clear_prev_node(&self) -> Weak<Node<T>> {
-        // core::sync::atomic::fence(Ordering::Release);
-        let prev_ptr = Weak::into_raw(Weak::<Node<T>>::new()) as *mut Node<T>;
-        let _old_prev_ptr = self.prev.swap(prev_ptr, Ordering::Release);
-        self._weak_from_ptr(_old_prev_ptr)
+        self.prev.write(Weak::new())
     }
 
     #[inline]
@@ -226,14 +187,10 @@ impl<T> Node<T> {
             };
 
             // if the prev node is removed, try again
-            // CAUTION: if we use try_lock here, it will
-            // run Weak::upgrade more frequently, and
-            // cause memory issue, still investigating
-            if prev_node.try_lock().is_err() {
+            if prev_node.lock().is_err() {
                 core::hint::spin_loop();
                 continue;
             }
-            // core::sync::atomic::fence(Ordering::Acquire);
 
             // check current node is not removed
             if self.is_removed() {
@@ -629,7 +586,7 @@ mod tests {
     }
 
     #[test]
-    fn test_push_pop() {
+    fn test_push_back_pop_front() {
         let queue = super::LinkedList::new();
         for i in 0..1000 {
             queue.push_back(i);

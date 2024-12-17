@@ -1,7 +1,6 @@
 //! A simple concurrent singly linked list
 
 use alloc::sync::Arc;
-// use rcu_cell::arc::Arc;
 use rcu_cell::RcuCell;
 
 use core::ops::Deref;
