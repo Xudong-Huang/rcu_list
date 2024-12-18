@@ -138,12 +138,15 @@ impl<T> Node<T> {
 }
 
 /// An entry in a `LinkedList`.
-pub struct Entry<T>(Arc<Node<T>>);
+pub struct Entry<'a, T> {
+    list: &'a LinkedList<T>,
+    node: Arc<Node<T>>,
+}
 
-impl<T> Entry<T> {
+impl<T> Entry<'_, T> {
     /// Remove the entry from the list.
     pub fn remove(self) {
-        let curr_node = &self.0;
+        let curr_node = &self.node;
         let prev_node = match curr_node.lock_prev_node() {
             Ok(node) => node,
             // the current node is already removed
@@ -166,13 +169,13 @@ impl<T> Entry<T> {
     /// if the entry was removed, the element will be returned in Err()
     pub fn insert_after(&self, elt: T) -> Result<Entry<T>, T> {
         let new_node = Arc::new(Node::new(elt));
-        new_node.set_prev_node(&self.0);
+        new_node.set_prev_node(&self.node);
 
         // move the drop out of locks
         let old_next_prev;
         let old_head_next;
 
-        let next_node = match self.0.lock() {
+        let next_node = match self.node.lock() {
             Ok(node) => node,
             Err(_) => {
                 // current entry removed, can't insert
@@ -185,50 +188,71 @@ impl<T> Entry<T> {
             {
                 old_next_prev = next_node.set_prev_node(&new_node);
                 new_node.next.write(next_node.clone());
-                old_head_next = self.0.next.write(new_node.clone());
+                old_head_next = self.node.next.write(new_node.clone());
             }
             new_node.unlock();
         }
-        self.0.unlock();
+        self.node.unlock();
 
         drop(old_next_prev);
         drop(old_head_next);
 
-        Ok(Entry(new_node))
+        Ok(Entry {
+            list: self.list,
+            node: new_node,
+        })
     }
 
     /// Returns true if the entry is removed.
     pub fn is_removed(&self) -> bool {
-        self.0.is_removed()
+        self.node.is_removed()
+    }
+
+    /// Returns the next entry in the list.
+    /// Returns `None` if the entry is removed.
+    pub fn next(&self) -> Option<Entry<T>> {
+        if self.is_removed() {
+            return None;
+        }
+
+        let next = self.node.next.read()?;
+        if Arc::ptr_eq(&self.node, &self.list.tail) {
+            // we will not return the tail node as an entry
+            return None;
+        }
+        Some(Entry {
+            list: self.list,
+            node: next,
+        })
     }
 }
 
-impl<T> Deref for Entry<T> {
+impl<T> Deref for Entry<'_, T> {
     type Target = T;
     fn deref(&self) -> &T {
-        self.0.data.as_ref().unwrap()
+        self.node.data.as_ref().unwrap()
     }
 }
 
-impl<T: fmt::Debug> fmt::Debug for Entry<T> {
+impl<T: fmt::Debug> fmt::Debug for Entry<'_, T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Entry({:?})", self.0.data.as_ref().unwrap())
+        write!(f, "Entry({:?})", self.node.data.as_ref().unwrap())
     }
 }
 
-impl<T: PartialEq> PartialEq for Entry<T> {
+impl<T: PartialEq> PartialEq for Entry<'_, T> {
     fn eq(&self, other: &Self) -> bool {
-        self.0.data == other.0.data
+        self.node.data == other.node.data
     }
 }
 
-impl<T> AsRef<T> for Entry<T> {
+impl<T> AsRef<T> for Entry<'_, T> {
     fn as_ref(&self) -> &T {
         self.deref()
     }
 }
 
-impl<T: PartialOrd> PartialOrd for Entry<T> {
+impl<T: PartialOrd> PartialOrd for Entry<'_, T> {
     fn partial_cmp(&self, other: &Entry<T>) -> Option<cmp::Ordering> {
         (**self).partial_cmp(&**other)
     }
@@ -250,13 +274,13 @@ impl<T: PartialOrd> PartialOrd for Entry<T> {
     }
 }
 
-impl<T: Ord> Ord for Entry<T> {
+impl<T: Ord> Ord for Entry<'_, T> {
     fn cmp(&self, other: &Entry<T>) -> cmp::Ordering {
         (**self).cmp(&**other)
     }
 }
 
-impl<T: Eq> Eq for Entry<T> {}
+impl<T: Eq> Eq for Entry<'_, T> {}
 
 /// A concurrent doubly linked list.
 /// Internally it use fine-grained double locks to ensure thread safety.
@@ -305,7 +329,7 @@ impl<T> LinkedList<T> {
         // head.next is always non empty
         let node = self.head.next_node();
         // only the tail has None data
-        node.data.is_some().then(|| Entry(node))
+        node.data.is_some().then(|| Entry { list: self, node })
     }
 
     /// Returns an Entry to the back element, or `None` if the list is empty.
@@ -321,7 +345,7 @@ impl<T> LinkedList<T> {
             }
         };
         // only the head has None data
-        node.data.is_some().then(|| Entry(node))
+        node.data.is_some().then(|| Entry { list: self, node })
     }
 
     /// Pushes an element to the front of the list, and returns an Entry to it.
@@ -349,7 +373,10 @@ impl<T> LinkedList<T> {
         drop(old_next_prev);
         drop(old_head_next);
 
-        Entry(new_node)
+        Entry {
+            list: self,
+            node: new_node,
+        }
     }
 
     /// Pops the front element of the list, returns `None` if the list is empty.
@@ -383,7 +410,10 @@ impl<T> LinkedList<T> {
         drop(old_next_prev);
         drop(old_head_next);
 
-        Some(Entry(curr_node))
+        Some(Entry {
+            list: self,
+            node: curr_node,
+        })
     }
 
     /// Pushes an element to the back of the list, and returns an Entry to it.
@@ -412,7 +442,10 @@ impl<T> LinkedList<T> {
         drop(old_tail_prev);
         drop(old_prev_next);
 
-        Entry(new_node)
+        Entry {
+            list: self,
+            node: new_node,
+        }
     }
 
     /// Pops the back element of the list, returns `None` if the list is empty.
@@ -463,7 +496,10 @@ impl<T> LinkedList<T> {
             drop(old_tail_prev);
             drop(old_prev_next);
 
-            return Some(Entry(curr_node));
+            return Some(Entry {
+                list: self,
+                node: curr_node,
+            });
         }
     }
 
@@ -471,7 +507,7 @@ impl<T> LinkedList<T> {
     #[inline]
     pub fn iter(&self) -> Iter<T> {
         Iter {
-            tail: &self.tail,
+            list: self,
             curr: self.head.clone(),
         }
     }
@@ -482,20 +518,23 @@ impl<T> LinkedList<T> {
 /// This `struct` is created by [`LinkedList::iter()`]. See its
 /// documentation for more.
 pub struct Iter<'a, T: 'a> {
-    tail: &'a Arc<Node<T>>,
+    list: &'a LinkedList<T>,
     curr: Arc<Node<T>>,
 }
 
-impl<T> Iterator for Iter<'_, T> {
-    type Item = Entry<T>;
+impl<'a, T> Iterator for Iter<'a, T> {
+    type Item = Entry<'a, T>;
 
     fn next(&mut self) -> Option<Self::Item> {
         let next = self.curr.next_node();
         self.curr = next.clone();
-        if Arc::ptr_eq(&self.curr, self.tail) {
+        if Arc::ptr_eq(&self.curr, &self.list.tail) {
             return None;
         }
-        Some(Entry(next))
+        Some(Entry {
+            list: self.list,
+            node: next,
+        })
     }
 }
 

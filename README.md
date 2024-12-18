@@ -32,6 +32,7 @@ each `Entry` that returned by instert operations could do the following operatio
 - `remove`: Remove the current element from the list.
 - `insert_after`: Insert an element after the entry.
 - `deref`: Read the value of the current element.
+- `next`: Get the next entry in the list.
 
 
 ### Note
