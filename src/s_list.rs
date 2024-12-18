@@ -4,10 +4,14 @@ use alloc::sync::Arc;
 use rcu_cell::RcuCell;
 
 use core::ops::Deref;
+use core::sync::atomic::AtomicUsize;
 use core::{cmp, fmt};
 
 #[derive(Debug)]
 struct Node<T> {
+    // mark the node is removed
+    version: AtomicUsize,
+    // the next node, None means the end of the list
     next: RcuCell<Node<T>>,
     // only the head node has None data
     data: Option<T>,
@@ -22,6 +26,7 @@ pub struct Entry<'a, T> {
 
 impl<T> Entry<'_, T> {
     /// Inserts an element after the current entry and returns the new entry.
+    /// If the current entry is removed, the element will be returned in `Err`.
     pub fn insert_after(&self, elt: T) -> Entry<T> {
         let node = EntryImpl::new(self.list, &self.node).insert_after(elt);
         Entry {
@@ -108,6 +113,7 @@ impl<'a, 'b, T> EntryImpl<'a, 'b, T> {
 
     fn insert_after(&self, elt: T) -> Arc<Node<T>> {
         let new_node = Arc::new(Node {
+            version: AtomicUsize::new(0),
             next: RcuCell::none(),
             data: Some(elt),
         });
@@ -122,12 +128,11 @@ impl<'a, 'b, T> EntryImpl<'a, 'b, T> {
         });
 
         if old_next.is_none() {
-            let new_node = new_node.clone();
             // update the tail to the new node
             self.list.tail.update(|tail| {
                 let tail = tail.unwrap(); // tail is never none
                 if Arc::ptr_eq(&tail, self.node) {
-                    Some(new_node)
+                    Some(new_node.clone())
                 } else {
                     Some(tail)
                 }
@@ -173,6 +178,7 @@ impl<T> LinkedList<T> {
     pub fn new() -> Self {
         // this is only used for list head, should never deref it's data
         let head = Arc::new(Node {
+            version: AtomicUsize::new(0),
             next: RcuCell::none(),
             data: None,
         });
@@ -200,6 +206,7 @@ impl<T> LinkedList<T> {
     /// Appends an element to the back of the list
     pub fn push_back(&self, elt: T) -> Entry<T> {
         let node = Arc::new(Node {
+            version: AtomicUsize::new(0),
             next: RcuCell::none(),
             data: Some(elt),
         });
