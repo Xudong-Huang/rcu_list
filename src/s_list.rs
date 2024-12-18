@@ -6,45 +6,38 @@ use rcu_cell::RcuCell;
 use core::ops::Deref;
 use core::{cmp, fmt};
 
-use crate::version_lock::VersionLock;
-
 #[derive(Debug)]
 struct Node<T> {
-    // mark the node is removed
-    version: VersionLock,
     // the next node, None means the end of the list
     next: RcuCell<Node<T>>,
     // only the head node has None data
     data: Option<T>,
 }
 
+impl<T> Default for Node<T> {
+    fn default() -> Self {
+        Self {
+            next: RcuCell::none(),
+            data: None,
+        }
+    }
+}
+
+impl<T> Node<T> {
+    #[inline]
+    fn new(data: T) -> Self {
+        Node {
+            next: RcuCell::none(),
+            data: Some(data),
+        }
+    }
+}
+
 /// An entry in a `LinkedList`. You can `deref` it to get the value.
 #[derive(Clone)]
 pub struct Entry<'a, T> {
-    list: &'a LinkedList<T>,
+    _list: &'a LinkedList<T>,
     node: Arc<Node<T>>,
-}
-
-impl<T> Entry<'_, T> {
-    /// Inserts an element after the current entry and returns the new entry.
-    /// If the current entry is removed, the element will be returned in `Err`.
-    pub fn insert_after(&self, elt: T) -> Entry<T> {
-        let node = EntryImpl::new(self.list, &self.node).insert_after(elt);
-        Entry {
-            list: self.list,
-            node,
-        }
-    }
-
-    /// Removes the element after the current entry and returns it.
-    pub fn remove_after(&self) -> Option<Entry<T>> {
-        EntryImpl::new(self.list, &self.node)
-            .remove_after()
-            .map(|node| Entry {
-                list: self.list,
-                node,
-            })
-    }
 }
 
 impl<T> Deref for Entry<'_, T> {
@@ -112,20 +105,17 @@ impl<'a, 'b, T> EntryImpl<'a, 'b, T> {
         Self { list, node }
     }
 
-    fn insert_after(&self, elt: T) -> Arc<Node<T>> {
+    fn insert_after(&self, elt: T) {
         let new_node = Arc::new(Node {
-            version: VersionLock::new(),
             next: RcuCell::none(),
             data: Some(elt),
         });
 
-        let new_node1 = new_node.clone();
-
         let old_next = self.node.next.update(|next| {
             if let Some(next) = next {
-                new_node1.next.write(next);
+                new_node.next.write(next);
             }
-            Some(new_node1)
+            Some(new_node.clone())
         });
 
         if old_next.is_none() {
@@ -133,13 +123,12 @@ impl<'a, 'b, T> EntryImpl<'a, 'b, T> {
             self.list.tail.update(|tail| {
                 let tail = tail.unwrap(); // tail is never none
                 if Arc::ptr_eq(&tail, self.node) {
-                    Some(new_node.clone())
+                    Some(new_node)
                 } else {
                     Some(tail)
                 }
             });
         }
-        new_node
     }
 
     fn remove_after(&self) -> Option<Arc<Node<T>>> {
@@ -178,12 +167,7 @@ impl<T> LinkedList<T> {
     /// Creates a new, empty `LinkedList`.
     pub fn new() -> Self {
         // this is only used for list head, should never deref it's data
-        let head = Arc::new(Node {
-            version: VersionLock::new(),
-            next: RcuCell::none(),
-            data: None,
-        });
-
+        let head = Arc::new(Node::<T>::default());
         let tail = RcuCell::from(head.clone());
 
         Self { head, tail }
@@ -196,21 +180,20 @@ impl<T> LinkedList<T> {
 
     /// Returns the first element of the list, or None if the list is empty.
     pub fn front(&self) -> Option<Entry<T>> {
-        self.head.next.read().map(|node| Entry { list: self, node })
+        self.head
+            .next
+            .read()
+            .map(|node| Entry { _list: self, node })
     }
 
     /// Returns the last element of the list, or None if the list is empty.
     pub fn back(&self) -> Option<Entry<T>> {
-        self.tail.read().map(|node| Entry { list: self, node })
+        self.tail.read().map(|node| Entry { _list: self, node })
     }
 
     /// Appends an element to the back of the list
     pub fn push_back(&self, elt: T) -> Entry<T> {
-        let node = Arc::new(Node {
-            version: VersionLock::new(),
-            next: RcuCell::none(),
-            data: Some(elt),
-        });
+        let node = Arc::new(Node::new(elt));
 
         let new_node = node.clone();
         let new_node1 = node.clone();
@@ -221,20 +204,19 @@ impl<T> LinkedList<T> {
             Some(new_node1)
         });
 
-        Entry { list: self, node }
+        Entry { _list: self, node }
     }
 
     /// Insert an element to the front of the list.
-    pub fn push_front(&self, elt: T) -> Entry<T> {
-        let node = EntryImpl::new(self, &self.head).insert_after(elt);
-        Entry { list: self, node }
+    pub fn push_front(&self, elt: T) {
+        EntryImpl::new(self, &self.head).insert_after(elt);
     }
 
     /// Removes the first element of the list and returns it,
     pub fn pop_front(&self) -> Option<Entry<T>> {
         EntryImpl::new(self, &self.head)
             .remove_after()
-            .map(|node| Entry { list: self, node })
+            .map(|node| Entry { _list: self, node })
     }
 
     /// Returns an iterator over the elements of the list.
@@ -264,7 +246,7 @@ impl<'a, T> Iterator for Iter<'a, T> {
             self.curr = node.clone();
         }
         next.map(|node| Entry {
-            list: self.list,
+            _list: self.list,
             node,
         })
     }
@@ -307,25 +289,6 @@ mod tests {
         assert_eq!(*iter.next().unwrap(), 1);
         assert_eq!(*iter.next().unwrap(), 2);
         assert_eq!(*iter.next().unwrap(), 3);
-        assert!(iter.next().is_none());
-    }
-
-    #[test]
-    fn test_entry() {
-        let list = super::LinkedList::new();
-        list.push_back(1);
-        let entry = list.push_back(2);
-        list.push_back(3);
-
-        let entry1 = entry.insert_after(4);
-        assert_eq!(*entry1, 4);
-
-        assert_eq!(entry1.remove_after().as_deref(), Some(&3));
-
-        let mut iter = list.iter();
-        assert_eq!(*iter.next().unwrap(), 1);
-        assert_eq!(*iter.next().unwrap(), 2);
-        assert_eq!(*iter.next().unwrap(), 4);
         assert!(iter.next().is_none());
     }
 }

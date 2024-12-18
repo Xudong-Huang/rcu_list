@@ -15,8 +15,6 @@ The `SingleLinkedList` supports the following operations:
 - `iter`: Iterate over the list.
 
 each `Entry` that returned by instert operations could do the following operations:
-- `insert_after`: Insert an element after the entry.
-- `remove_after`: Remove the element after the entry.
 - `deref`: Read the value of the current element.
 
 ## DoubleLinkedList
