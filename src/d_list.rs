@@ -146,61 +146,13 @@ pub struct Entry<'a, T> {
 impl<T> Entry<'_, T> {
     /// Remove the entry from the list.
     pub fn remove(self) {
-        let curr_node = &self.node;
-        let prev_node = match curr_node.lock_prev_node() {
-            Ok(node) => node,
-            // the current node is already removed
-            Err(_) => return,
-        };
-        {
-            // unwrap safety: the prev node is locked
-            let next_node = curr_node.lock().unwrap();
-            {
-                next_node.set_prev_node(&prev_node);
-                prev_node.next.write(next_node);
-            }
-            curr_node.unlock_remove();
-            curr_node.clear_prev_node();
-        }
-        prev_node.unlock();
+        EntryImpl::new(self.list, &self.node).remove()
     }
 
     /// insert an element after the entry.
     /// if the entry was removed, the element will be returned in Err()
     pub fn insert_after(&self, elt: T) -> Result<Entry<T>, T> {
-        let new_node = Arc::new(Node::new(elt));
-        new_node.set_prev_node(&self.node);
-
-        // move the drop out of locks
-        let old_next_prev;
-        let old_head_next;
-
-        let next_node = match self.node.lock() {
-            Ok(node) => node,
-            Err(_) => {
-                // current entry removed, can't insert
-                let n = Arc::into_inner(new_node).unwrap();
-                return Err(n.data.unwrap());
-            }
-        };
-        {
-            new_node.try_lock().unwrap();
-            {
-                old_next_prev = next_node.set_prev_node(&new_node);
-                new_node.next.write(next_node.clone());
-                old_head_next = self.node.next.write(new_node.clone());
-            }
-            new_node.unlock();
-        }
-        self.node.unlock();
-
-        drop(old_next_prev);
-        drop(old_head_next);
-
-        Ok(Entry {
-            list: self.list,
-            node: new_node,
-        })
+        EntryImpl::new(self.list, &self.node).insert_after(elt)
     }
 
     /// Returns true if the entry is removed.
@@ -350,157 +302,28 @@ impl<T> LinkedList<T> {
 
     /// Pushes an element to the front of the list, and returns an Entry to it.
     pub fn push_front(&self, elt: T) -> Entry<T> {
-        let new_node = Arc::new(Node::new(elt));
-        new_node.set_prev_node(&self.head);
-
-        // move the drop out of locks
-        let old_next_prev;
-        let old_head_next;
-
-        // unwrap safety: head is never removed
-        let next_node = self.head.lock().unwrap();
-        {
-            new_node.try_lock().unwrap();
-            {
-                old_next_prev = next_node.set_prev_node(&new_node);
-                new_node.next.write(next_node.clone());
-                old_head_next = self.head.next.write(new_node.clone());
-            }
-            new_node.unlock();
-        }
-        self.head.unlock();
-
-        drop(old_next_prev);
-        drop(old_head_next);
-
-        Entry {
-            list: self,
-            node: new_node,
+        match EntryImpl::new(self, &self.head).insert_after(elt) {
+            Ok(entry) => entry,
+            Err(_) => unreachable!("push_front should always success"),
         }
     }
 
     /// Pops the front element of the list, returns `None` if the list is empty.
     pub fn pop_front(&self) -> Option<Entry<T>> {
-        // move the drop out of locks
-        let old_next_prev;
-        let old_head_next;
-
-        // unwrap safety: head is never revmoed
-        let curr_node = self.head.lock().unwrap();
-        {
-            // the list is empty
-            if Arc::ptr_eq(&curr_node, &self.tail) {
-                self.head.unlock();
-                return None;
-            }
-
-            // unwrap safety: next must be valid since it's still in the list
-            let next_node = curr_node.lock().unwrap();
-            {
-                old_next_prev = next_node.set_prev_node(&self.head);
-                old_head_next = self.head.next.write(next_node.clone());
-            }
-            curr_node.unlock_remove();
-            curr_node.clear_prev_node();
-        }
-        self.head.unlock();
-
-        // don't clear the next field, could break the iterator
-        // curr_node.next.take();
-        drop(old_next_prev);
-        drop(old_head_next);
-
-        Some(Entry {
-            list: self,
-            node: curr_node,
-        })
+        EntryImpl::new(self, &self.head).remove_after()
     }
 
     /// Pushes an element to the back of the list, and returns an Entry to it.
     pub fn push_back(&self, elt: T) -> Entry<T> {
-        let new_node = Arc::new(Node::new(elt));
-
-        // move the drop out of locks
-        let old_tail_prev;
-        let old_prev_next;
-
-        // should always success since the tail is never removed
-        let prev_node = self.tail.lock_prev_node().unwrap();
-        {
-            new_node.set_prev_node(&prev_node);
-
-            new_node.try_lock().unwrap();
-            {
-                old_tail_prev = self.tail.set_prev_node(&new_node);
-                new_node.next.write(self.tail.clone());
-                old_prev_next = prev_node.next.write(new_node.clone());
-            }
-            new_node.unlock();
-        }
-        prev_node.unlock();
-
-        drop(old_tail_prev);
-        drop(old_prev_next);
-
-        Entry {
-            list: self,
-            node: new_node,
+        match EntryImpl::new(self, &self.tail).insert_ahead(elt) {
+            Ok(entry) => entry,
+            Err(_) => unreachable!("push_back should always success"),
         }
     }
 
     /// Pops the back element of the list, returns `None` if the list is empty.
     pub fn pop_back(&self) -> Option<Entry<T>> {
-        loop {
-            // move the drop out of locks
-            let old_tail_prev;
-            let old_prev_next;
-
-            let curr_node = match self.tail.prev_node() {
-                Some(node) => node,
-                None => continue,
-            };
-
-            // the list is empty
-            if Arc::ptr_eq(&curr_node, &self.head) {
-                return None;
-            }
-
-            // try to lock the tail.prev.prev node
-            let prev_node = match curr_node.lock_prev_node() {
-                Ok(node) => node,
-                Err(_) => continue,
-            };
-
-            {
-                // lock the curr node
-                let next_node = curr_node.lock().unwrap();
-                {
-                    // after lock curr_node some thing changed, try again
-                    if !Arc::ptr_eq(&next_node, &self.tail) {
-                        curr_node.unlock();
-                        prev_node.unlock();
-                        continue;
-                    }
-
-                    old_tail_prev = self.tail.set_prev_node(&prev_node);
-                    old_prev_next = prev_node.next.write(next_node).unwrap();
-                }
-                curr_node.unlock_remove();
-                curr_node.clear_prev_node();
-            }
-            prev_node.unlock();
-
-            // since we are pop from back, the next could be released
-            curr_node.next.take();
-
-            drop(old_tail_prev);
-            drop(old_prev_next);
-
-            return Some(Entry {
-                list: self,
-                node: curr_node,
-            });
-        }
+        EntryImpl::new(self, &self.tail).remove_ahead()
     }
 
     /// Returns an iterator over the elements of the list.
@@ -535,6 +358,207 @@ impl<'a, T> Iterator for Iter<'a, T> {
             list: self.list,
             node: next,
         })
+    }
+}
+
+struct EntryImpl<'a, 'b, T> {
+    list: &'a LinkedList<T>,
+    node: &'b Arc<Node<T>>,
+}
+
+impl<'a, 'b, T> EntryImpl<'a, 'b, T> {
+    #[inline]
+    fn new(list: &'a LinkedList<T>, node: &'b Arc<Node<T>>) -> Self {
+        Self { list, node }
+    }
+
+    /// Remove the entry from the list.
+    fn remove(self) {
+        let curr_node = self.node;
+        let prev_node = match curr_node.lock_prev_node() {
+            Ok(node) => node,
+            // the current node is already removed
+            Err(_) => return,
+        };
+        {
+            // unwrap safety: the prev node is locked
+            let next_node = curr_node.lock().unwrap();
+            {
+                next_node.set_prev_node(&prev_node);
+                prev_node.next.write(next_node);
+            }
+            curr_node.unlock_remove();
+            curr_node.clear_prev_node();
+        }
+        prev_node.unlock();
+    }
+
+    /// insert an element after the entry.
+    /// if the entry was removed, the element will be returned in Err()
+    fn insert_after(&self, elt: T) -> Result<Entry<'a, T>, T> {
+        let new_node = Arc::new(Node::new(elt));
+        new_node.set_prev_node(self.node);
+
+        // move the drop out of locks
+        let old_next_prev;
+        let old_head_next;
+
+        let next_node = match self.node.lock() {
+            Ok(node) => node,
+            Err(_) => {
+                // current entry removed, can't insert
+                let n = Arc::into_inner(new_node).unwrap();
+                return Err(n.data.unwrap());
+            }
+        };
+        {
+            new_node.try_lock().unwrap();
+            {
+                old_next_prev = next_node.set_prev_node(&new_node);
+                new_node.next.write(next_node.clone());
+                old_head_next = self.node.next.write(new_node.clone());
+            }
+            new_node.unlock();
+        }
+        self.node.unlock();
+
+        drop(old_next_prev);
+        drop(old_head_next);
+
+        Ok(Entry {
+            list: self.list,
+            node: new_node,
+        })
+    }
+
+    /// remove element after this entry
+    fn remove_after(&self) -> Option<Entry<'a, T>> {
+        // move the drop out of locks
+        let old_next_prev;
+        let old_head_next;
+
+        // unwrap safety: head is never revmoed
+        let curr_node = self.node.lock().unwrap();
+        {
+            // there is no element after entry
+            if Arc::ptr_eq(&curr_node, &self.list.tail) {
+                self.node.unlock();
+                return None;
+            }
+
+            // unwrap safety: next must be valid since it's still in the list
+            let next_node = curr_node.lock().unwrap();
+            {
+                old_next_prev = next_node.set_prev_node(self.node);
+                old_head_next = self.node.next.write(next_node.clone());
+            }
+            curr_node.unlock_remove();
+            curr_node.clear_prev_node();
+        }
+        self.node.unlock();
+
+        // don't clear the next field, could break the iterator
+        // curr_node.next.take();
+        drop(old_next_prev);
+        drop(old_head_next);
+
+        Some(Entry {
+            list: self.list,
+            node: curr_node,
+        })
+    }
+
+    /// Insert an element ahead of the entry, and returns the new Entry to it.
+    pub fn insert_ahead(&self, elt: T) -> Result<Entry<'a, T>, T> {
+        let new_node = Arc::new(Node::new(elt));
+
+        // move the drop out of locks
+        let old_node_prev;
+        let old_prev_next;
+
+        // should always success since the tail is never removed
+        let prev_node = match self.node.lock_prev_node() {
+            Ok(node) => node,
+            Err(_) => {
+                let node = Arc::into_inner(new_node).unwrap();
+                return Err(node.data.unwrap());
+            }
+        };
+        {
+            new_node.set_prev_node(&prev_node);
+
+            new_node.try_lock().unwrap();
+            {
+                old_node_prev = self.node.set_prev_node(&new_node);
+                new_node.next.write(self.node.clone());
+                old_prev_next = prev_node.next.write(new_node.clone());
+            }
+            new_node.unlock();
+        }
+        prev_node.unlock();
+
+        drop(old_node_prev);
+        drop(old_prev_next);
+
+        Ok(Entry {
+            list: self.list,
+            node: new_node,
+        })
+    }
+
+    /// Pops the back element of the list, returns `None` if the list is empty.
+    fn remove_ahead(&self) -> Option<Entry<'a, T>> {
+        loop {
+            // move the drop out of locks
+            let old_tail_prev;
+            let old_prev_next;
+
+            let curr_node = match self.node.prev_node() {
+                Some(node) => node,
+                None => continue,
+            };
+
+            // the list is empty
+            if Arc::ptr_eq(&curr_node, &self.list.head) {
+                return None;
+            }
+
+            // try to lock the tail.prev.prev node
+            let prev_node = match curr_node.lock_prev_node() {
+                Ok(node) => node,
+                Err(_) => continue,
+            };
+
+            {
+                // lock the curr node
+                let next_node = curr_node.lock().unwrap();
+                {
+                    // after lock curr_node some thing changed, try again
+                    if !Arc::ptr_eq(&next_node, self.node) {
+                        curr_node.unlock();
+                        prev_node.unlock();
+                        continue;
+                    }
+
+                    old_tail_prev = self.node.set_prev_node(&prev_node);
+                    old_prev_next = prev_node.next.write(next_node).unwrap();
+                }
+                curr_node.unlock_remove();
+                curr_node.clear_prev_node();
+            }
+            prev_node.unlock();
+
+            // since we are pop from back, the next could be released
+            curr_node.next.take();
+
+            drop(old_tail_prev);
+            drop(old_prev_next);
+
+            return Some(Entry {
+                list: self.list,
+                node: curr_node,
+            });
+        }
     }
 }
 
