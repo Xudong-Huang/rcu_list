@@ -28,7 +28,7 @@ The `DoubleLinkedList` supports the following operations:
 - `pop_back`: Remove the element from the tail of list.
 - `iter`: Iterate over the list.
 
-each `Entry` that returned by instert operations could do the following operations:
+each `Entry` that returned by insert operations could do the following operations:
 - `remove`: Remove the current element from the list.
 - `insert_after`: Insert an element after the entry.
 - `insert_ahead`: Insert an element ahead the entry.
@@ -38,6 +38,8 @@ each `Entry` that returned by instert operations could do the following operatio
 - `is_removed`: Check if the element is removed from the list.
 - `next`: Get the next entry in the list.
 
+Any write operations like insert/remove on a removed `Entry` would just fail.
+But it's safe to read(deref) the value of a removed `Entry`.
 
 ### Note
 1. `push_front` has better performance than `push_back`, because it doesn't need to lock the previous element.
