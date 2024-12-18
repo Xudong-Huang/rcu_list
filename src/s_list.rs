@@ -15,34 +15,58 @@ struct Node<T> {
 
 /// An entry in a `LinkedList`. You can `deref` it to get the value.
 #[derive(Clone)]
-pub struct Entry<T>(Arc<Node<T>>);
+pub struct Entry<'a, T> {
+    list: &'a LinkedList<T>,
+    node: Arc<Node<T>>,
+}
 
-impl<T> Deref for Entry<T> {
+impl<T> Entry<'_, T> {
+    /// Inserts an element after the current entry and returns the new entry.
+    pub fn insert_after(&self, elt: T) -> Entry<T> {
+        let node = EntryImpl::new(self.list, &self.node).insert_after(elt);
+        Entry {
+            list: self.list,
+            node,
+        }
+    }
+
+    /// Removes the element after the current entry and returns it.
+    pub fn remove_after(&self) -> Option<Entry<T>> {
+        EntryImpl::new(self.list, &self.node)
+            .remove_after()
+            .map(|node| Entry {
+                list: self.list,
+                node,
+            })
+    }
+}
+
+impl<T> Deref for Entry<'_, T> {
     type Target = T;
     fn deref(&self) -> &T {
-        self.0.data.as_ref().unwrap()
+        self.node.data.as_ref().unwrap()
     }
 }
 
-impl<T: fmt::Debug> fmt::Debug for Entry<T> {
+impl<T: fmt::Debug> fmt::Debug for Entry<'_, T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Entry({:?})", self.0.data.as_ref().unwrap())
+        write!(f, "Entry({:?})", self.node.data.as_ref().unwrap())
     }
 }
 
-impl<T: PartialEq> PartialEq for Entry<T> {
+impl<T: PartialEq> PartialEq for Entry<'_, T> {
     fn eq(&self, other: &Self) -> bool {
-        self.0.data == other.0.data
+        self.node.data == other.node.data
     }
 }
 
-impl<T> AsRef<T> for Entry<T> {
+impl<T> AsRef<T> for Entry<'_, T> {
     fn as_ref(&self) -> &T {
         self.deref()
     }
 }
 
-impl<T: PartialOrd> PartialOrd for Entry<T> {
+impl<T: PartialOrd> PartialOrd for Entry<'_, T> {
     fn partial_cmp(&self, other: &Entry<T>) -> Option<cmp::Ordering> {
         (**self).partial_cmp(&**other)
     }
@@ -64,13 +88,13 @@ impl<T: PartialOrd> PartialOrd for Entry<T> {
     }
 }
 
-impl<T: Ord> Ord for Entry<T> {
+impl<T: Ord> Ord for Entry<'_, T> {
     fn cmp(&self, other: &Entry<T>) -> cmp::Ordering {
         (**self).cmp(&**other)
     }
 }
 
-impl<T: Eq> Eq for Entry<T> {}
+impl<T: Eq> Eq for Entry<'_, T> {}
 
 struct EntryImpl<'a, 'b, T> {
     list: &'a LinkedList<T>,
@@ -82,20 +106,23 @@ impl<'a, 'b, T> EntryImpl<'a, 'b, T> {
         Self { list, node }
     }
 
-    fn insert_after(&self, elt: T) {
+    fn insert_after(&self, elt: T) -> Arc<Node<T>> {
         let new_node = Arc::new(Node {
             next: RcuCell::none(),
             data: Some(elt),
         });
 
+        let new_node1 = new_node.clone();
+
         let old_next = self.node.next.update(|next| {
             if let Some(next) = next {
-                new_node.next.write(next);
+                new_node1.next.write(next);
             }
-            Some(new_node.clone())
+            Some(new_node1)
         });
 
         if old_next.is_none() {
+            let new_node = new_node.clone();
             // update the tail to the new node
             self.list.tail.update(|tail| {
                 let tail = tail.unwrap(); // tail is never none
@@ -106,6 +133,7 @@ impl<'a, 'b, T> EntryImpl<'a, 'b, T> {
                 }
             });
         }
+        new_node
     }
 
     fn remove_after(&self) -> Option<Arc<Node<T>>> {
@@ -161,42 +189,50 @@ impl<T> LinkedList<T> {
 
     /// Returns the first element of the list, or None if the list is empty.
     pub fn front(&self) -> Option<Entry<T>> {
-        self.head.next.read().map(Entry)
+        self.head.next.read().map(|node| Entry { list: self, node })
     }
 
     /// Returns the last element of the list, or None if the list is empty.
     pub fn back(&self) -> Option<Entry<T>> {
-        self.tail.read().map(Entry)
+        self.tail.read().map(|node| Entry { list: self, node })
     }
 
     /// Appends an element to the back of the list
-    pub fn push_back(&self, elt: T) {
-        let new_node = Arc::new(Node {
+    pub fn push_back(&self, elt: T) -> Entry<T> {
+        let node = Arc::new(Node {
             next: RcuCell::none(),
             data: Some(elt),
         });
 
+        let new_node = node.clone();
+        let new_node1 = node.clone();
+
         self.tail.update(|tail| {
             let old_tail = tail.unwrap(); // tail is never none
-            old_tail.next.write(new_node.clone());
-            Some(new_node)
+            old_tail.next.write(new_node);
+            Some(new_node1)
         });
+
+        Entry { list: self, node }
     }
 
     /// Insert an element to the front of the list.
-    pub fn push_front(&self, elt: T) {
-        EntryImpl::new(self, &self.head).insert_after(elt);
+    pub fn push_front(&self, elt: T) -> Entry<T> {
+        let node = EntryImpl::new(self, &self.head).insert_after(elt);
+        Entry { list: self, node }
     }
 
     /// Removes the first element of the list and returns it,
     pub fn pop_front(&self) -> Option<Entry<T>> {
-        EntryImpl::new(self, &self.head).remove_after().map(Entry)
+        EntryImpl::new(self, &self.head)
+            .remove_after()
+            .map(|node| Entry { list: self, node })
     }
 
     /// Returns an iterator over the elements of the list.
     pub fn iter(&self) -> Iter<T> {
         Iter {
-            _list: self,
+            list: self,
             curr: self.head.clone(),
         }
     }
@@ -207,19 +243,22 @@ impl<T> LinkedList<T> {
 /// This `struct` is created by [`LinkedList::iter()`]. See its
 /// documentation for more.
 pub struct Iter<'a, T: 'a> {
-    _list: &'a LinkedList<T>,
+    list: &'a LinkedList<T>,
     curr: Arc<Node<T>>,
 }
 
-impl<T> Iterator for Iter<'_, T> {
-    type Item = Entry<T>;
+impl<'a, T> Iterator for Iter<'a, T> {
+    type Item = Entry<'a, T>;
 
     fn next(&mut self) -> Option<Self::Item> {
         let next = self.curr.next.read();
         if let Some(ref node) = next {
             self.curr = node.clone();
         }
-        next.map(Entry)
+        next.map(|node| Entry {
+            list: self.list,
+            node,
+        })
     }
 }
 
@@ -260,6 +299,25 @@ mod tests {
         assert_eq!(*iter.next().unwrap(), 1);
         assert_eq!(*iter.next().unwrap(), 2);
         assert_eq!(*iter.next().unwrap(), 3);
+        assert!(iter.next().is_none());
+    }
+
+    #[test]
+    fn test_entry() {
+        let list = super::LinkedList::new();
+        list.push_back(1);
+        let entry = list.push_back(2);
+        list.push_back(3);
+
+        let entry1 = entry.insert_after(4);
+        assert_eq!(*entry1, 4);
+
+        assert_eq!(entry1.remove_after().as_deref(), Some(&3));
+
+        let mut iter = list.iter();
+        assert_eq!(*iter.next().unwrap(), 1);
+        assert_eq!(*iter.next().unwrap(), 2);
+        assert_eq!(*iter.next().unwrap(), 4);
         assert!(iter.next().is_none());
     }
 }
