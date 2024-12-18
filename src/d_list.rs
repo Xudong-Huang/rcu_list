@@ -2,19 +2,14 @@ use alloc::sync::{Arc, Weak};
 use rcu_cell::{RcuCell, RcuWeak};
 
 use core::ops::Deref;
-use core::sync::atomic::{AtomicUsize, Ordering};
 use core::{cmp, fmt};
 
-#[derive(Debug)]
-enum NodeTryLockErr {
-    Removed,
-    Retry,
-}
+use crate::version_lock::{TryLockErr, VersionLock};
 
 #[derive(Debug)]
 #[repr(align(64))]
 struct Node<T> {
-    version: AtomicUsize,
+    version: VersionLock,
     next: RcuCell<Node<T>>,
     prev: RcuWeak<Node<T>>,
     // only the head node has None data
@@ -24,7 +19,7 @@ struct Node<T> {
 impl<T> Default for Node<T> {
     fn default() -> Self {
         Node {
-            version: AtomicUsize::new(1 << 63),
+            version: VersionLock::new(),
             prev: RcuWeak::new(),
             next: RcuCell::none(),
             data: None,
@@ -36,7 +31,7 @@ impl<T> Node<T> {
     #[inline]
     fn new(data: T) -> Self {
         Node {
-            version: AtomicUsize::new(0),
+            version: VersionLock::new(),
             prev: RcuWeak::new(),
             next: RcuCell::none(),
             data: Some(data),
@@ -44,73 +39,14 @@ impl<T> Node<T> {
     }
 
     #[inline]
-    fn version_generation(&self, version: usize) -> usize {
-        // first bit means node is removed
-        // second bit means node is locked
-        // valid generations are 0, 4, 8, 12...
-        if version & 2 == 0 {
-            // not locked, use current generation
-            version
-        } else {
-            // locked, use next generation to try
-            version + 2
-        }
-    }
-
-    #[inline]
-    fn try_lock(&self) -> Result<usize, NodeTryLockErr> {
-        let version = self.version.load(Ordering::Relaxed);
-        if version & 1 == 1 {
-            return Err(NodeTryLockErr::Removed);
-        }
-
-        let version = self.version_generation(version);
-        match self.version.compare_exchange(
-            version,
-            version + 2,
-            Ordering::Release,
-            Ordering::Relaxed,
-        ) {
-            Ok(v) => {
-                core::sync::atomic::fence(Ordering::Acquire);
-                Ok(v)
-            }
-
-            Err(v) => {
-                if v & 1 == 1 {
-                    Err(NodeTryLockErr::Removed)
-                } else {
-                    Err(NodeTryLockErr::Retry)
-                }
-            }
-        }
+    fn try_lock(&self) -> Result<usize, TryLockErr> {
+        self.version.try_lock()
     }
 
     // lock the current node and return it's next node
     #[inline]
-    fn lock(self: &Arc<Self>) -> Result<Arc<Node<T>>, NodeTryLockErr> {
-        let backoff = crossbeam_utils::Backoff::new();
-
-        let version = self.version.load(Ordering::Relaxed);
-        if version & 1 == 1 {
-            return Err(NodeTryLockErr::Removed);
-        }
-
-        let mut version = self.version_generation(version);
-        while let Err(v) = self.version.compare_exchange_weak(
-            version,
-            version + 2,
-            Ordering::Release,
-            Ordering::Relaxed,
-        ) {
-            if v & 1 == 1 {
-                return Err(NodeTryLockErr::Removed);
-            }
-            version = self.version_generation(v);
-            backoff.snooze();
-        }
-
-        core::sync::atomic::fence(Ordering::Acquire);
+    fn lock(self: &Arc<Self>) -> Result<Arc<Node<T>>, TryLockErr> {
+        self.version.lock()?;
         let next_node = self.next_node();
         assert!(next_node.prev_eq(self));
         Ok(next_node)
@@ -118,19 +54,17 @@ impl<T> Node<T> {
 
     #[inline]
     fn unlock(&self) {
-        let version = self.version.load(Ordering::Relaxed);
-        self.version.store(version + 2, Ordering::Release);
+        self.version.unlock();
     }
 
     #[inline]
     fn unlock_remove(&self) {
-        let version = self.version.load(Ordering::Relaxed);
-        self.version.store(version + 3, Ordering::Release);
+        self.version.unlock_remove();
     }
 
     #[inline]
     fn is_removed(&self) -> bool {
-        self.version.load(Ordering::Relaxed) & 1 == 1
+        self.version.is_removed()
     }
 
     #[inline]

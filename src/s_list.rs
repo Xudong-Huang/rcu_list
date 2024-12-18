@@ -4,13 +4,14 @@ use alloc::sync::Arc;
 use rcu_cell::RcuCell;
 
 use core::ops::Deref;
-use core::sync::atomic::AtomicUsize;
 use core::{cmp, fmt};
+
+use crate::version_lock::VersionLock;
 
 #[derive(Debug)]
 struct Node<T> {
     // mark the node is removed
-    version: AtomicUsize,
+    version: VersionLock,
     // the next node, None means the end of the list
     next: RcuCell<Node<T>>,
     // only the head node has None data
@@ -113,7 +114,7 @@ impl<'a, 'b, T> EntryImpl<'a, 'b, T> {
 
     fn insert_after(&self, elt: T) -> Arc<Node<T>> {
         let new_node = Arc::new(Node {
-            version: AtomicUsize::new(0),
+            version: VersionLock::new(),
             next: RcuCell::none(),
             data: Some(elt),
         });
@@ -178,7 +179,7 @@ impl<T> LinkedList<T> {
     pub fn new() -> Self {
         // this is only used for list head, should never deref it's data
         let head = Arc::new(Node {
-            version: AtomicUsize::new(0),
+            version: VersionLock::new(),
             next: RcuCell::none(),
             data: None,
         });
@@ -206,7 +207,7 @@ impl<T> LinkedList<T> {
     /// Appends an element to the back of the list
     pub fn push_back(&self, elt: T) -> Entry<T> {
         let node = Arc::new(Node {
-            version: AtomicUsize::new(0),
+            version: VersionLock::new(),
             next: RcuCell::none(),
             data: Some(elt),
         });

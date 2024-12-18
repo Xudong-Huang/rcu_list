@@ -1,7 +1,7 @@
 use core::sync::atomic::{AtomicUsize, Ordering};
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
-pub enum NodeTryLockErr {
+pub enum TryLockErr {
     Removed,
     Retry,
 }
@@ -36,10 +36,10 @@ impl VersionLock {
     /// try lock and return current version
     /// if the node is removed, return Err(NodeTryLockErr::Removed)
     #[inline]
-    pub fn try_lock(&self) -> Result<usize, NodeTryLockErr> {
+    pub fn try_lock(&self) -> Result<usize, TryLockErr> {
         let version = self.version.load(Ordering::Relaxed);
         if version & 1 == 1 {
-            return Err(NodeTryLockErr::Removed);
+            return Err(TryLockErr::Removed);
         }
 
         let version = self.version_generation(version);
@@ -56,9 +56,9 @@ impl VersionLock {
 
             Err(v) => {
                 if v & 1 == 1 {
-                    Err(NodeTryLockErr::Removed)
+                    Err(TryLockErr::Removed)
                 } else {
-                    Err(NodeTryLockErr::Retry)
+                    Err(TryLockErr::Retry)
                 }
             }
         }
@@ -68,12 +68,12 @@ impl VersionLock {
     /// if the node is removed, return Err(NodeTryLockErr::Removed)
     /// valid version is returned in 0, 4, 8, 12...
     #[inline]
-    pub fn lock(&self) -> Result<usize, NodeTryLockErr> {
+    pub fn lock(&self) -> Result<usize, TryLockErr> {
         let backoff = crossbeam_utils::Backoff::new();
 
         let version = self.version.load(Ordering::Relaxed);
         if version & 1 == 1 {
-            return Err(NodeTryLockErr::Removed);
+            return Err(TryLockErr::Removed);
         }
 
         let mut version = self.version_generation(version);
@@ -84,7 +84,7 @@ impl VersionLock {
             Ordering::Relaxed,
         ) {
             if v & 1 == 1 {
-                return Err(NodeTryLockErr::Removed);
+                return Err(TryLockErr::Removed);
             }
             version = self.version_generation(v);
             backoff.snooze();
@@ -127,11 +127,11 @@ mod tests {
     fn version_lock_test() {
         let lock = super::VersionLock::new();
         assert_eq!(lock.try_lock(), Ok(0));
-        assert_eq!(lock.try_lock(), Err(super::NodeTryLockErr::Retry));
+        assert_eq!(lock.try_lock(), Err(super::TryLockErr::Retry));
         lock.unlock();
         assert_eq!(lock.try_lock(), Ok(4));
         lock.unlock_remove();
-        assert_eq!(lock.try_lock(), Err(super::NodeTryLockErr::Removed));
+        assert_eq!(lock.try_lock(), Err(super::TryLockErr::Removed));
         assert!(lock.is_removed());
         assert!(!lock.is_ready());
     }

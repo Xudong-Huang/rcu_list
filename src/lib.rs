@@ -9,3 +9,4 @@ pub mod version_lock;
 
 pub use d_list::LinkedList as DoubleLinkedList;
 pub use s_list::LinkedList as SingleLinedList;
+pub use version_lock::{TryLockErr, VersionLock};
