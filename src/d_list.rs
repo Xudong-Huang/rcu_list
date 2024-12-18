@@ -155,6 +155,22 @@ impl<T> Entry<'_, T> {
         EntryImpl::new(self.list, &self.node).insert_after(elt)
     }
 
+    /// insert an element ahead the entry.
+    /// if the entry was removed, the element will be returned in Err()
+    pub fn insert_ahead(&self, elt: T) -> Result<Entry<T>, T> {
+        EntryImpl::new(self.list, &self.node).insert_ahead(elt)
+    }
+
+    /// Remove the entry after this entry.
+    pub fn remove_after(&self) -> Option<Entry<T>> {
+        EntryImpl::new(self.list, &self.node).remove_after()
+    }
+
+    /// Remove the entry ahead this entry.
+    pub fn remove_ahead(&self) -> Option<Entry<T>> {
+        EntryImpl::new(self.list, &self.node).remove_ahead()
+    }
+
     /// Returns true if the entry is removed.
     pub fn is_removed(&self) -> bool {
         self.node.is_removed()
