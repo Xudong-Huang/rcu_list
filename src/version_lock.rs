@@ -114,11 +114,11 @@ impl VersionLock {
         self.version.load(Ordering::Relaxed) & 1 == 1
     }
 
-    #[inline]
-    /// Check if the lock is unlocked and not removed
-    pub fn is_ready(&self) -> bool {
-        self.version.load(Ordering::Relaxed) & 3 == 0
-    }
+    // #[inline]
+    // /// Check if the lock is unlocked and not removed
+    // pub fn is_ready(&self) -> bool {
+    //     self.version.load(Ordering::Relaxed) & 3 == 0
+    // }
 }
 
 #[cfg(test)]
@@ -133,6 +133,6 @@ mod tests {
         lock.unlock_remove();
         assert_eq!(lock.try_lock(), Err(super::TryLockErr::Removed));
         assert!(lock.is_removed());
-        assert!(!lock.is_ready());
+        // assert!(!lock.is_ready());
     }
 }

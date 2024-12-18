@@ -93,14 +93,14 @@ impl<T> Node<T> {
         self.next.read().unwrap()
     }
 
-    fn lock_prev_node(self: &Arc<Self>) -> Result<Arc<Node<T>>, ()> {
+    fn lock_prev_node(self: &Arc<Self>) -> Result<Arc<Node<T>>, TryLockErr> {
         loop {
             let prev_node = match self.prev_node() {
                 // something wrong, like the prev node is dropped,
                 // or the current node is removed
                 None => {
                     if self.is_removed() {
-                        return Err(());
+                        return Err(TryLockErr::Removed);
                     }
                     core::hint::spin_loop();
                     continue;
@@ -119,7 +119,7 @@ impl<T> Node<T> {
             // check current node is not removed
             if self.is_removed() {
                 prev_node.unlock();
-                return Err(());
+                return Err(TryLockErr::Removed);
             }
 
             // if the prev node is changed, try again
@@ -453,8 +453,10 @@ impl<'a, 'b, T> EntryImpl<'a, 'b, T> {
         let old_next_prev;
         let old_head_next;
 
-        // unwrap safety: head is never revmoed
-        let curr_node = self.node.lock().unwrap();
+        let curr_node = match self.node.lock() {
+            Ok(node) => node,
+            Err(_) => return None,
+        };
         {
             // there is no element after entry
             if Arc::ptr_eq(&curr_node, &self.list.tail) {
@@ -492,7 +494,6 @@ impl<'a, 'b, T> EntryImpl<'a, 'b, T> {
         let old_node_prev;
         let old_prev_next;
 
-        // should always success since the tail is never removed
         let prev_node = match self.node.lock_prev_node() {
             Ok(node) => node,
             Err(_) => {
@@ -522,11 +523,11 @@ impl<'a, 'b, T> EntryImpl<'a, 'b, T> {
         })
     }
 
-    /// Pops the back element of the list, returns `None` if the list is empty.
+    /// Remove the element ahead of the entry, returns `None` if the list is empty.
     fn remove_ahead(&self) -> Option<Entry<'a, T>> {
         loop {
             // move the drop out of locks
-            let old_tail_prev;
+            let old_node_prev;
             let old_prev_next;
 
             let curr_node = match self.node.prev_node() {
@@ -539,14 +540,14 @@ impl<'a, 'b, T> EntryImpl<'a, 'b, T> {
                 return None;
             }
 
-            // try to lock the tail.prev.prev node
+            // try to lock the node.prev.prev node
             let prev_node = match curr_node.lock_prev_node() {
                 Ok(node) => node,
                 Err(_) => continue,
             };
 
             {
-                // lock the curr node
+                // lock the curr node, curr node is not removed
                 let next_node = curr_node.lock().unwrap();
                 {
                     // after lock curr_node some thing changed, try again
@@ -556,8 +557,8 @@ impl<'a, 'b, T> EntryImpl<'a, 'b, T> {
                         continue;
                     }
 
-                    old_tail_prev = self.node.set_prev_node(&prev_node);
-                    old_prev_next = prev_node.next.write(next_node).unwrap();
+                    old_node_prev = self.node.set_prev_node(&prev_node);
+                    old_prev_next = prev_node.next.write(next_node);
                 }
                 curr_node.unlock_remove();
                 curr_node.clear_prev_node();
@@ -567,7 +568,7 @@ impl<'a, 'b, T> EntryImpl<'a, 'b, T> {
             // since we are pop from back, the next could be released
             curr_node.next.take();
 
-            drop(old_tail_prev);
+            drop(old_node_prev);
             drop(old_prev_next);
 
             return Some(Entry {
