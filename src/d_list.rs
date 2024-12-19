@@ -145,7 +145,7 @@ pub struct Entry<'a, T> {
 
 impl<T> Entry<'_, T> {
     /// Remove the entry from the list.
-    pub fn remove(self) {
+    pub fn remove(&self) {
         EntryImpl::new(self.list, &self.node).remove()
     }
 
