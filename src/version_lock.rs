@@ -46,14 +46,10 @@ impl VersionLock {
         match self.version.compare_exchange(
             version,
             version + 2,
-            Ordering::Release,
+            Ordering::Acquire,
             Ordering::Relaxed,
         ) {
-            Ok(v) => {
-                core::sync::atomic::fence(Ordering::Acquire);
-                Ok(v)
-            }
-
+            Ok(v) => Ok(v),
             Err(v) => {
                 if v & 1 == 1 {
                     Err(TryLockErr::Removed)
@@ -80,7 +76,7 @@ impl VersionLock {
         while let Err(v) = self.version.compare_exchange_weak(
             version,
             version + 2,
-            Ordering::Release,
+            Ordering::Acquire,
             Ordering::Relaxed,
         ) {
             if v & 1 == 1 {
@@ -90,7 +86,6 @@ impl VersionLock {
             backoff.snooze();
         }
 
-        core::sync::atomic::fence(Ordering::Acquire);
         Ok(version)
     }
 
