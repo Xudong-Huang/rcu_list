@@ -200,7 +200,8 @@ impl<T> LinkedList<T> {
         let new_node1 = node.clone();
 
         self.tail.update(|tail| {
-            let old_tail = tail.unwrap(); // tail is never none
+            // tail is never none
+            let old_tail = tail.unwrap();
             old_tail.next.write(new_node);
             Some(new_node1)
         });
