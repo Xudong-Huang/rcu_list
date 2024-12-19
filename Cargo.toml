@@ -1,7 +1,17 @@
 [package]
 name = "rcu_list"
-version = "0.1.0"
 edition = "2021"
+version = "0.1.0"
+description = "a lockless concurrent list implementation"
+authors = ["Xudong Huang <huangxu008@hotmail.com>"]
+categories = ["concurrency", "data-structures", "no-std"]
+keywords = ["rcu", "lockless", "atomic", "list"]
+repository = "https://github.com/Xudong-Huang/rcu_list"
+homepage = "https://github.com/Xudong-Huang/rcu_list"
+documentation = "https://docs.rs/rcu_list"
+license = "LGPL-3.0"
+readme = "./README.md"
+exclude = [".gitignore", "benches/**"]
 
 [dependencies]
 rcu_cell = "1.1.6"
