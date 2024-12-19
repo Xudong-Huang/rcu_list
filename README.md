@@ -2,6 +2,10 @@
 
 This is a concurrent linked list implementation in Rust using [RcuCell](https://github.com/Xudong-Huang/rcu_cell).
 
+[![Build Status](https://github.com/Xudong-Huang/co_managed/workflows/CI/badge.svg)](https://github.com/Xudong-Huang/rcu_list/actions?query=workflow%3ACI)
+[![Current Crates.io Version](https://img.shields.io/crates/v/rcu_list.svg)](https://crates.io/crates/rcu_list)
+[![Document](https://img.shields.io/badge/doc-rcu_list-green.svg)](https://docs.rs/rcu_list)
+
 There are two types of linked list: `SignleLinkedList` and `DoubleLinkedList`.
 
 ## SingleLinkedList
