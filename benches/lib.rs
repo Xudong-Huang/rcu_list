@@ -1,5 +1,4 @@
 #![feature(test)]
-
 extern crate test;
 
 use rcu_list::d_list::LinkedList;
