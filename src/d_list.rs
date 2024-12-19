@@ -339,12 +339,7 @@ impl<T> LinkedList<T> {
 
     /// Pops the back element of the list, returns `None` if the list is empty.
     pub fn pop_back(&self) -> Option<Entry<T>> {
-        EntryImpl::new(self, &self.tail)
-            .remove_ahead()
-            .inspect(|entry| {
-                // since we are pop from back, the next could be released
-                entry.node.next.take();
-            })
+        EntryImpl::new(self, &self.tail).remove_ahead()
     }
 
     /// Returns an iterator over the elements of the list.
