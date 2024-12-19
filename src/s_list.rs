@@ -111,24 +111,24 @@ impl<'a, 'b, T> EntryImpl<'a, 'b, T> {
             data: Some(elt),
         });
 
-        let old_next = self.node.next.update(|next| {
+        self.node.next.update(|next| {
             if let Some(next) = next {
                 new_node.next.write(next);
+            } else {
+                // update the tail to the new node
+                self.list.tail.update(|tail| {
+                    // tail is never none
+                    let tail = tail.unwrap();
+                    if Arc::ptr_eq(&tail, self.node) {
+                        Some(new_node.clone())
+                    } else {
+                        Some(tail)
+                    }
+                });
             }
-            Some(new_node.clone())
-        });
 
-        if old_next.is_none() {
-            // update the tail to the new node
-            self.list.tail.update(|tail| {
-                let tail = tail.unwrap(); // tail is never none
-                if Arc::ptr_eq(&tail, self.node) {
-                    Some(new_node)
-                } else {
-                    Some(tail)
-                }
-            });
-        }
+            Some(new_node)
+        });
     }
 
     fn remove_after(&self) -> Option<Arc<Node<T>>> {
@@ -138,7 +138,8 @@ impl<'a, 'b, T> EntryImpl<'a, 'b, T> {
                 None => return None,
             };
             self.list.tail.update(|tail| {
-                let tail = tail.unwrap(); // tail is never none
+                // tail is never none
+                let tail = tail.unwrap();
                 if Arc::ptr_eq(&tail, &next) {
                     Some(self.node.clone())
                 } else {
