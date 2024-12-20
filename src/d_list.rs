@@ -138,12 +138,13 @@ impl<T> Node<T> {
 }
 
 /// An entry in a `LinkedList`.
+#[derive(Clone)]
 pub struct Entry<'a, T> {
     list: &'a LinkedList<T>,
     node: Arc<Node<T>>,
 }
 
-impl<T> Entry<'_, T> {
+impl<'a, T> Entry<'a, T> {
     /// Remove the entry from the list.
     pub fn remove(&self) {
         EntryImpl::new(self.list, &self.node).remove()
@@ -151,23 +152,23 @@ impl<T> Entry<'_, T> {
 
     /// insert an element after the entry.
     /// if the entry was removed, the element will be returned in Err()
-    pub fn insert_after(&self, elt: T) -> Result<Entry<T>, T> {
+    pub fn insert_after(&self, elt: T) -> Result<Entry<'a, T>, T> {
         EntryImpl::new(self.list, &self.node).insert_after(elt)
     }
 
     /// insert an element ahead the entry.
     /// if the entry was removed, the element will be returned in Err()
-    pub fn insert_ahead(&self, elt: T) -> Result<Entry<T>, T> {
+    pub fn insert_ahead(&self, elt: T) -> Result<Entry<'a, T>, T> {
         EntryImpl::new(self.list, &self.node).insert_ahead(elt)
     }
 
     /// Remove the entry after this entry.
-    pub fn remove_after(&self) -> Option<Entry<T>> {
+    pub fn remove_after(&self) -> Option<Entry<'a, T>> {
         EntryImpl::new(self.list, &self.node).remove_after()
     }
 
     /// Remove the entry ahead this entry.
-    pub fn remove_ahead(&self) -> Option<Entry<T>> {
+    pub fn remove_ahead(&self) -> Option<Entry<'a, T>> {
         EntryImpl::new(self.list, &self.node).remove_ahead()
     }
 
@@ -178,7 +179,7 @@ impl<T> Entry<'_, T> {
 
     /// Returns the next entry in the list.
     /// Returns `None` if the entry is removed.
-    pub fn next(&self) -> Option<Entry<T>> {
+    pub fn next(&self) -> Option<Entry<'a, T>> {
         if self.is_removed() {
             return None;
         }
