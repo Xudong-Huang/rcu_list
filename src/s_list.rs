@@ -36,8 +36,19 @@ impl<T> Node<T> {
 /// An entry in a `LinkedList`. You can `deref` it to get the value.
 #[derive(Clone)]
 pub struct Entry<'a, T> {
-    _list: &'a LinkedList<T>,
+    list: &'a LinkedList<T>,
     node: Arc<Node<T>>,
+}
+
+impl<'a, T> Entry<'a, T> {
+    /// Returns the next entry in the list.
+    pub fn next(&self) -> Option<Entry<'a, T>> {
+        let next = self.node.next.read()?;
+        Some(Entry {
+            list: self.list,
+            node: next,
+        })
+    }
 }
 
 impl<T> Deref for Entry<'_, T> {
@@ -181,15 +192,12 @@ impl<T> LinkedList<T> {
 
     /// Returns the first element of the list, or None if the list is empty.
     pub fn front(&self) -> Option<Entry<T>> {
-        self.head
-            .next
-            .read()
-            .map(|node| Entry { _list: self, node })
+        self.head.next.read().map(|node| Entry { list: self, node })
     }
 
     /// Returns the last element of the list, or None if the list is empty.
     pub fn back(&self) -> Option<Entry<T>> {
-        self.tail.read().map(|node| Entry { _list: self, node })
+        self.tail.read().map(|node| Entry { list: self, node })
     }
 
     /// Appends an element to the back of the list
@@ -206,7 +214,7 @@ impl<T> LinkedList<T> {
             Some(new_node1)
         });
 
-        Entry { _list: self, node }
+        Entry { list: self, node }
     }
 
     /// Insert an element to the front of the list.
@@ -218,7 +226,7 @@ impl<T> LinkedList<T> {
     pub fn pop_front(&self) -> Option<Entry<T>> {
         EntryImpl::new(self, &self.head)
             .remove_after()
-            .map(|node| Entry { _list: self, node })
+            .map(|node| Entry { list: self, node })
     }
 
     /// Returns an iterator over the elements of the list.
@@ -248,7 +256,7 @@ impl<'a, T> Iterator for Iter<'a, T> {
             self.curr = node.clone();
         }
         next.map(|node| Entry {
-            _list: self.list,
+            list: self.list,
             node,
         })
     }
