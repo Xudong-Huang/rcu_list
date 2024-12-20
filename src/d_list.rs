@@ -428,8 +428,8 @@ impl<'a, 'b, T> EntryImpl<'a, 'b, T> {
         {
             new_node.try_lock().unwrap();
             {
-                old_next_prev = next_node.set_prev_node(&new_node);
                 new_node.next.write(next_node.clone());
+                old_next_prev = next_node.set_prev_node(&new_node);
                 old_head_next = self.node.next.write(new_node.clone());
             }
             new_node.unlock();
@@ -487,6 +487,7 @@ impl<'a, 'b, T> EntryImpl<'a, 'b, T> {
     /// Insert an element ahead of the entry, and returns the new Entry to it.
     pub fn insert_ahead(&self, elt: T) -> Result<Entry<'a, T>, T> {
         let new_node = Arc::new(Node::new(elt));
+        new_node.next.write(self.node.clone());
 
         // move the drop out of locks
         let old_node_prev;
@@ -501,14 +502,12 @@ impl<'a, 'b, T> EntryImpl<'a, 'b, T> {
         };
         {
             new_node.set_prev_node(&prev_node);
-
-            new_node.try_lock().unwrap();
+            // new_node.try_lock().unwrap();
             {
                 old_node_prev = self.node.set_prev_node(&new_node);
-                new_node.next.write(self.node.clone());
                 old_prev_next = prev_node.next.write(new_node.clone());
             }
-            new_node.unlock();
+            // new_node.unlock();
         }
         prev_node.unlock();
 
