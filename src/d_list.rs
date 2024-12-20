@@ -366,14 +366,11 @@ impl<'a, T> Iterator for Iter<'a, T> {
     type Item = Entry<'a, T>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let next = self.curr.next_node();
-        self.curr = next.clone();
-        if Arc::ptr_eq(&self.curr, &self.list.tail) {
-            return None;
-        }
-        Some(Entry {
+        let next_node = self.curr.next.read()?;
+        self.curr = next_node.clone();
+        next_node.data.is_some().then(|| Entry {
             list: self.list,
-            node: next,
+            node: next_node,
         })
     }
 }
