@@ -62,7 +62,7 @@ fn simple_iter(b: &mut Bencher) {
 fn con_mpmc(b: &mut Bencher) {
     use std::sync::{Arc, Barrier};
     const THREADS: usize = 20;
-    const ITEMS: usize = 1_000;
+    const ITEMS: usize = 10_000;
 
     b.iter(|| {
         let queue = Arc::new(LinkedList::new());
@@ -101,7 +101,7 @@ fn con_mpmc(b: &mut Bencher) {
 fn con_mpmc_crossbeam(b: &mut Bencher) {
     use std::sync::{Arc, Barrier};
     const THREADS: usize = 20;
-    const ITEMS: usize = 1_000;
+    const ITEMS: usize = 10_000;
 
     b.iter(|| {
         let queue = Arc::new(crossbeam_queue::SegQueue::new());
@@ -114,11 +114,14 @@ fn con_mpmc_crossbeam(b: &mut Bencher) {
 
                 std::thread::spawn(move || {
                     barrier.wait();
+                    let mut vec = Vec::with_capacity(ITEMS);
                     for i in 0..ITEMS {
-                        queue.push(i);
+                        let item = Arc::new(i);
+                        queue.push(item.clone());
+                        vec.push(item);
                     }
 
-                    for _i in 0..ITEMS {
+                    for _ in vec {
                         queue.pop().unwrap();
                     }
                 })
