@@ -135,6 +135,21 @@ impl<T> Node<T> {
             return Ok(prev_node);
         }
     }
+
+    // /// update the node value and return the old value
+    // /// if the node is removed, return the new value in Err()
+    // fn update(self: &Arc<Self>, data: T) -> Result<T, T> {
+    //     if self.lock().is_err() {
+    //         return Err(data);
+    //     }
+    //     // Safety: the node is locked, but the read would broken if replace is not atomic
+    //     let old = unsafe {
+    //         let data_cell: &UnsafeCell<Option<T>> = core::mem::transmute(&self.data);
+    //         core::mem::replace(&mut *data_cell.get(), Some(data)).unwrap()
+    //     };
+    //     self.unlock();
+    //     Ok(old)
+    // }
 }
 
 /// An entry in a `LinkedList`.
