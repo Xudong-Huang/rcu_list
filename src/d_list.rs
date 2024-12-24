@@ -135,21 +135,6 @@ impl<T> Node<T> {
             return Ok(prev_node);
         }
     }
-
-    // /// update the node value and return the old value
-    // /// if the node is removed, return the new value in Err()
-    // fn update(self: &Arc<Self>, data: T) -> Result<T, T> {
-    //     if self.lock().is_err() {
-    //         return Err(data);
-    //     }
-    //     // Safety: the node is locked, but the read would broken if replace is not atomic
-    //     let old = unsafe {
-    //         let data_cell: &UnsafeCell<Option<T>> = core::mem::transmute(&self.data);
-    //         core::mem::replace(&mut *data_cell.get(), Some(data)).unwrap()
-    //     };
-    //     self.unlock();
-    //     Ok(old)
-    // }
 }
 
 /// An entry in a `LinkedList`.
@@ -160,6 +145,14 @@ pub struct Entry<'a, T> {
 }
 
 impl<'a, T> Entry<'a, T> {
+    /// Replace the entry with new value,
+    /// and return the old Entry which is marked as removed.
+    /// If the node is alredy removed, return the passed in value in Err().
+    /// Internally we create a new node to replace the old entry
+    pub fn replace(&self, elt: T) -> Result<Entry<'a, T>, T> {
+        EntryImpl::new(self.list, &self.node).replace(elt)
+    }
+
     /// Remove the entry from the list.
     pub fn remove(&self) {
         EntryImpl::new(self.list, &self.node).remove()
@@ -420,6 +413,47 @@ impl<'a, 'b, T> EntryImpl<'a, 'b, T> {
             curr_node.clear_prev_node();
         }
         prev_node.unlock();
+    }
+
+    /// Replace the entry with new value,
+    fn replace(&self, elt: T) -> Result<Entry<'a, T>, T> {
+        let new_node = Arc::new(Node::new(elt));
+        new_node.next.write(self.node.clone());
+
+        // move the drop out of locks
+        let old_node_prev;
+        let old_prev_next;
+
+        let prev_node = match self.node.lock_prev_node() {
+            Ok(node) => node,
+            Err(_) => {
+                let node = Arc::into_inner(new_node).unwrap();
+                return Err(node.data.unwrap());
+            }
+        };
+        {
+            new_node.set_prev_node(&prev_node);
+            new_node.try_lock().unwrap();
+            self.node.lock().unwrap();
+            {
+                let next_node = self.node.next_node();
+                old_node_prev = next_node.set_prev_node(&new_node);
+                new_node.next.write(next_node.clone());
+                old_prev_next = prev_node.next.write(new_node.clone());
+            }
+            self.node.unlock_remove();
+            new_node.unlock();
+            self.node.clear_prev_node();
+        }
+        prev_node.unlock();
+
+        drop(old_node_prev);
+        drop(old_prev_next);
+
+        Ok(Entry {
+            list: self.list,
+            node: new_node,
+        })
     }
 
     /// insert an element after the entry.
@@ -737,5 +771,23 @@ mod tests {
 
         drop(list);
         assert_eq!(REF.load(Ordering::Relaxed), (0..100).sum());
+    }
+
+    #[test]
+    fn entry_replace() {
+        let list = super::LinkedList::new();
+        list.push_back(1);
+        let entry = list.push_back(2);
+        list.push_back(3);
+
+        let new_entry = entry.replace(100).unwrap();
+        assert!(entry.is_removed());
+        assert_eq!(*new_entry, 100);
+
+        let mut iter = list.iter();
+        assert_eq!(*iter.next().unwrap(), 1);
+        assert_eq!(*iter.next().unwrap(), 100);
+        assert_eq!(*iter.next().unwrap(), 3);
+        assert!(iter.next().is_none());
     }
 }
