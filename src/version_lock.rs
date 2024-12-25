@@ -20,17 +20,19 @@ impl VersionLock {
     }
 
     #[inline]
-    fn version_generation(&self, version: usize) -> usize {
+    fn next_version(&self, version: usize) -> usize {
         // first bit means node is removed
         // second bit means node is locked
         // valid generations are 0, 4, 8, 12...
-        if version & 2 == 0 {
-            // not locked, use current generation
-            version
-        } else {
-            // locked, use next generation to try
-            version + 2
-        }
+
+        // if version & 2 == 0 {
+        //     // not locked, use current generation
+        //     version
+        // } else {
+        //     // locked, use next generation to try
+        //     version + 2
+        // }
+        version + (version & 2)
     }
 
     /// try lock and return current version
@@ -42,7 +44,7 @@ impl VersionLock {
             return Err(LockErr::Removed);
         }
 
-        let version = self.version_generation(version);
+        let version = self.next_version(version);
         match self.version.compare_exchange(
             version,
             version + 2,
@@ -72,7 +74,7 @@ impl VersionLock {
             return Err(LockErr::Removed);
         }
 
-        let mut version = self.version_generation(version);
+        let mut version = self.next_version(version);
         while let Err(v) = self.version.compare_exchange_weak(
             version,
             version + 2,
@@ -82,7 +84,7 @@ impl VersionLock {
             if v & 1 == 1 {
                 return Err(LockErr::Removed);
             }
-            version = self.version_generation(v);
+            version = self.next_version(v);
             backoff.snooze();
         }
 
@@ -129,5 +131,23 @@ mod tests {
         assert_eq!(lock.try_lock(), Err(super::LockErr::Removed));
         assert!(lock.is_removed());
         // assert!(!lock.is_ready());
+    }
+
+    #[test]
+    fn next_version() {
+        let lock = super::VersionLock::new();
+        assert_eq!(lock.next_version(0), 0);
+        assert_eq!(lock.next_version(1), 1);
+        assert_eq!(lock.next_version(2), 4);
+        assert_eq!(lock.next_version(3), 5);
+        assert_eq!(lock.next_version(4), 4);
+        assert_eq!(lock.next_version(5), 5);
+        assert_eq!(lock.next_version(6), 8);
+        assert_eq!(lock.next_version(7), 9);
+        assert_eq!(lock.next_version(8), 8);
+        assert_eq!(lock.next_version(9), 9);
+        assert_eq!(lock.next_version(10), 12);
+        assert_eq!(lock.next_version(11), 13);
+        assert_eq!(lock.next_version(12), 12);
     }
 }
