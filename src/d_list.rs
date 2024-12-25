@@ -4,7 +4,7 @@ use rcu_cell::{RcuCell, RcuWeak};
 use core::ops::Deref;
 use core::{cmp, fmt};
 
-use crate::version_lock::{TryLockErr, VersionLock};
+use crate::version_lock::{LockErr, VersionLock};
 
 #[derive(Debug)]
 #[repr(align(64))]
@@ -39,13 +39,13 @@ impl<T> Node<T> {
     }
 
     #[inline]
-    fn try_lock(&self) -> Result<usize, TryLockErr> {
+    fn try_lock(&self) -> Result<usize, LockErr> {
         self.version.try_lock()
     }
 
     // lock the current node and return it's next node
     #[inline]
-    fn lock(self: &Arc<Self>) -> Result<Arc<Node<T>>, TryLockErr> {
+    fn lock(self: &Arc<Self>) -> Result<Arc<Node<T>>, LockErr> {
         self.version.lock()?;
         let next_node = self.next_node();
         assert!(next_node.prev_eq(self));
@@ -93,14 +93,14 @@ impl<T> Node<T> {
         self.next.read().unwrap()
     }
 
-    fn lock_prev_node(self: &Arc<Self>) -> Result<Arc<Node<T>>, TryLockErr> {
+    fn lock_prev_node(self: &Arc<Self>) -> Result<Arc<Node<T>>, LockErr> {
         loop {
             let prev_node = match self.prev_node() {
                 // something wrong, like the prev node is dropped,
                 // or the current node is removed
                 None => {
                     if self.is_removed() {
-                        return Err(TryLockErr::Removed);
+                        return Err(LockErr::Removed);
                     }
                     core::hint::spin_loop();
                     continue;
@@ -119,7 +119,7 @@ impl<T> Node<T> {
             // check current node is not removed
             if self.is_removed() {
                 prev_node.unlock();
-                return Err(TryLockErr::Removed);
+                return Err(LockErr::Removed);
             }
 
             // if the prev node is changed, try again
