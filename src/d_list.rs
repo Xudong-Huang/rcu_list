@@ -83,8 +83,8 @@ impl<T> Node<T> {
     }
 
     #[inline]
-    fn clear_prev_node(&self) -> Weak<Node<T>> {
-        self.prev.write(Weak::new())
+    fn clear_prev_node(&self) {
+        self.prev.take();
     }
 
     #[inline]
