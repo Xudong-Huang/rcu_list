@@ -94,6 +94,7 @@ impl<T> Node<T> {
     }
 
     fn lock_prev_node(self: &Arc<Self>) -> Result<Arc<Node<T>>, LockErr> {
+        let backoff = crossbeam_utils::Backoff::new();
         loop {
             let prev_node = match self.prev_node() {
                 // something wrong, like the prev node is dropped,
@@ -113,8 +114,10 @@ impl<T> Node<T> {
 
             // if the prev node is removed, try again
             if prev_node.lock().is_err() {
+                backoff.spin();
                 continue;
             }
+            backoff.reset();
 
             // check current node is not removed
             if self.is_removed() {
@@ -402,17 +405,25 @@ impl<'a, 'b, T> EntryImpl<'a, 'b, T> {
             // the current node is already removed
             Err(_) => return,
         };
+
+        // move the drop out of locks
+        let old_node_prev;
+        let old_prev_next;
+
         {
             // unwrap safety: the prev node is locked
             let next_node = curr_node.lock().unwrap();
             {
-                next_node.set_prev_node(&prev_node);
-                prev_node.next.write(next_node);
+                old_node_prev = next_node.set_prev_node(&prev_node);
+                old_prev_next = prev_node.next.write(next_node);
             }
             curr_node.unlock_remove();
             curr_node.clear_prev_node();
         }
         prev_node.unlock();
+
+        drop(old_node_prev);
+        drop(old_prev_next);
     }
 
     /// Replace the entry with new value,
