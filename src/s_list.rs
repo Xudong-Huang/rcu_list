@@ -175,6 +175,13 @@ impl<T> Default for LinkedList<T> {
     }
 }
 
+impl<T> Drop for LinkedList<T> {
+    fn drop(&mut self) {
+        // avoid stack overflow
+        while self.pop_front().is_some() {}
+    }
+}
+
 impl<T> LinkedList<T> {
     /// Creates a new, empty `LinkedList`.
     pub fn new() -> Self {
@@ -251,13 +258,11 @@ impl<'a, T> Iterator for Iter<'a, T> {
     type Item = Entry<'a, T>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let next = self.curr.next.read();
-        if let Some(ref node) = next {
-            self.curr = node.clone();
-        }
-        next.map(|node| Entry {
+        let next = self.curr.next.read()?;
+        self.curr = next.clone();
+        Some(Entry {
             list: self.list,
-            node,
+            node: next,
         })
     }
 }

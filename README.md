@@ -34,6 +34,7 @@ The `DoubleLinkedList` supports the following operations:
 
 each `Entry` that returned by insert operations could do the following operations:
 - `remove`: Remove the current element from the list.
+- `replace`: Replace the current element from the list.
 - `insert_after`: Insert an element after the entry.
 - `insert_ahead`: Insert an element ahead the entry.
 - `remove_after`: Remove the element after the entry.
