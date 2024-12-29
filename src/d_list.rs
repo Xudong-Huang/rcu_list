@@ -117,7 +117,6 @@ impl<T> Node<T> {
                 backoff.spin();
                 continue;
             }
-            backoff.reset();
 
             // check current node is not removed
             if self.is_removed() {
@@ -128,7 +127,7 @@ impl<T> Node<T> {
             // if the prev node is changed, try again
             if !prev_node.next.arc_eq(self) {
                 prev_node.unlock();
-                core::hint::spin_loop();
+                backoff.reset();
                 continue;
             }
 
@@ -589,7 +588,13 @@ impl<'a, 'b, T> EntryImpl<'a, 'b, T> {
 
             let curr_node = match self.node.prev_node() {
                 Some(node) => node,
-                None => continue,
+                None => {
+                    if self.node.is_removed() {
+                        return None;
+                    }
+                    core::hint::spin_loop();
+                    continue;
+                }
             };
 
             // the list is empty

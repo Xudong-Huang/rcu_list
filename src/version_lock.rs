@@ -44,22 +44,24 @@ impl VersionLock {
             return Err(LockErr::Removed);
         }
 
-        let version = self.next_version(version);
-        match self.version.compare_exchange(
+        let mut version = self.next_version(version);
+        while let Err(v) = self.version.compare_exchange_weak(
             version,
             version + 2,
             Ordering::Acquire,
             Ordering::Relaxed,
         ) {
-            Ok(v) => Ok(v),
-            Err(v) => {
-                if v & 1 == 1 {
-                    Err(LockErr::Removed)
-                } else {
-                    Err(LockErr::Retry)
-                }
+            if v & 1 == 1 {
+                return Err(LockErr::Removed);
             }
+            if v & 2 == 2 {
+                // already locked
+                return Err(LockErr::Retry);
+            }
+            version = v;
         }
+
+        Ok(version)
     }
 
     /// lock and return current version
