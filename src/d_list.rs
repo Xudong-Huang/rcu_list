@@ -12,7 +12,7 @@ struct Node<T> {
     version: VersionLock,
     next: RcuCell<Node<T>>,
     prev: RcuWeak<Node<T>>,
-    // only the head node has None data
+    // only the head node and tail node has None data
     data: Option<T>,
 }
 
@@ -485,13 +485,13 @@ impl<'a, 'b, T> EntryImpl<'a, 'b, T> {
             }
         };
         {
-            new_node.try_lock().unwrap();
+            // new_node.try_lock().unwrap();
             {
                 new_node.next.write(next_node.clone());
                 old_next_prev = next_node.set_prev_node(&new_node);
                 old_head_next = self.node.next.write(new_node.clone());
             }
-            new_node.unlock();
+            // new_node.unlock();
         }
         self.node.unlock();
 

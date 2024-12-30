@@ -36,7 +36,7 @@ impl VersionLock {
     }
 
     /// try lock and return current version
-    /// if the node is removed, return Err(NodeTryLockErr::Removed)
+    /// if the node is removed, return Err(LockErr::Removed)
     #[inline]
     pub fn try_lock(&self) -> Result<usize, LockErr> {
         let version = self.version.load(Ordering::Relaxed);
@@ -65,7 +65,7 @@ impl VersionLock {
     }
 
     /// lock and return current version
-    /// if the node is removed, return Err(NodeTryLockErr::Removed)
+    /// if the node is removed, return Err(LockErr::Removed)
     /// valid version is returned in 0, 4, 8, 12...
     #[inline]
     pub fn lock(&self) -> Result<usize, LockErr> {
