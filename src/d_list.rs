@@ -413,6 +413,53 @@ impl<T> LinkedList<T> {
             guard,
         }
     }
+
+    /// Returns a pinned version of the list
+    pub fn pin(&self) -> PinedLinkedList<T> {
+        PinedLinkedList {
+            list: self,
+            guard: crossbeam_epoch::pin(),
+        }
+    }
+}
+
+pub struct PinedLinkedList<'l, T> {
+    list: &'l LinkedList<T>,
+    guard: Guard,
+}
+
+impl<'l, T> PinedLinkedList<'l, T> {
+    pub fn is_empty(&self) -> bool {
+        self.list.is_empty()
+    }
+
+    pub fn front(&self) -> Option<Entry<T>> {
+        self.list.front(&self.guard)
+    }
+
+    pub fn back(&self) -> Option<Entry<T>> {
+        self.list.back(&self.guard)
+    }
+
+    pub fn push_front(&self, elt: T) -> Entry<T> {
+        self.list.push_front(elt, &self.guard)
+    }
+
+    pub fn pop_front(&self) -> Option<Entry<T>> {
+        self.list.pop_front(&self.guard)
+    }
+
+    pub fn push_back(&self, elt: T) -> Entry<T> {
+        self.list.push_back(elt, &self.guard)
+    }
+
+    pub fn pop_back(&self) -> Option<Entry<T>> {
+        self.list.pop_back(&self.guard)
+    }
+
+    pub fn iter(&self) -> Iter<'l, '_, T> {
+        self.list.iter(&self.guard)
+    }
 }
 
 /// An iterator over the elements of a `LinkedList`.
@@ -832,31 +879,38 @@ mod tests {
         }
         let list = super::LinkedList::new();
 
-        let guard = &crossbeam_epoch::pin();
+        let guard = crossbeam_epoch::pin();
 
         for i in 0..100 {
-            list.push_back(Foo::new(i), guard);
+            list.push_back(Foo::new(i), &guard);
         }
 
+        list.pop_back(&guard);
+
         drop(list);
+
+        // force drop all the garbage
+        drop(guard);
+        for _ in 0..128 {
+            crossbeam_epoch::pin().flush();
+        }
         assert_eq!(REF.load(Ordering::Relaxed), (0..100).sum());
     }
 
     #[test]
     fn entry_replace() {
         let list = super::LinkedList::new();
+        let list = list.pin();
 
-        let guard = &crossbeam_epoch::pin();
-
-        list.push_back(1, guard);
-        let entry = list.push_back(2, guard);
-        list.push_back(3, guard);
+        list.push_back(1);
+        let entry = list.push_back(2);
+        list.push_back(3);
 
         let new_entry = entry.replace(100).unwrap();
         assert!(entry.is_removed());
         assert_eq!(*new_entry, 100);
 
-        let mut iter = list.iter(guard);
+        let mut iter = list.iter();
         assert_eq!(*iter.next().unwrap(), 1);
         assert_eq!(*iter.next().unwrap(), 100);
         assert_eq!(*iter.next().unwrap(), 3);
