@@ -123,9 +123,8 @@ fn con_mpmc_crossbeam(b: &mut Bencher) {
                     barrier.wait();
                     let mut vec = Vec::with_capacity(ITEMS);
                     for i in 0..ITEMS {
-                        let item = Arc::new(i);
-                        queue.push(item.clone());
-                        vec.push(item);
+                        queue.push(i);
+                        vec.push(i);
                     }
 
                     for _ in vec {
