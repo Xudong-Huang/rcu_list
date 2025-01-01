@@ -7,9 +7,9 @@ const THREADS: usize = 20;
 const ITEMS: usize = 1000;
 
 fn treiber_stack(c: &mut Criterion) {
-    c.bench_function("trieber_stack-rcu-single-list", |b| {
-        b.iter(run::<rcu_single_list::TreiberStack<usize>>)
-    });
+    // c.bench_function("trieber_stack-rcu-single-list", |b| {
+    //     b.iter(run::<rcu_single_list::TreiberStack<usize>>)
+    // });
 
     c.bench_function("trieber_stack-rcu-double-list", |b| {
         b.iter(run::<rcu_double_list::TreiberStack<usize>>)
@@ -317,35 +317,35 @@ mod rcu_stack {
     }
 }
 
-mod rcu_single_list {
-    use super::Stack;
-    use rcu_list::s_list::LinkedList;
+// mod rcu_single_list {
+//     use super::Stack;
+//     use rcu_list::s_list::LinkedList;
 
-    #[derive(Debug)]
-    pub struct TreiberStack<T> {
-        list: LinkedList<T>,
-    }
+//     #[derive(Debug)]
+//     pub struct TreiberStack<T> {
+//         list: LinkedList<T>,
+//     }
 
-    impl<T: Copy> Stack<T> for TreiberStack<T> {
-        fn new() -> TreiberStack<T> {
-            TreiberStack {
-                list: LinkedList::new(),
-            }
-        }
+//     impl<T: Copy> Stack<T> for TreiberStack<T> {
+//         fn new() -> TreiberStack<T> {
+//             TreiberStack {
+//                 list: LinkedList::new(),
+//             }
+//         }
 
-        fn push(&self, value: T) {
-            self.list.push_front(value);
-        }
+//         fn push(&self, value: T) {
+//             self.list.push_front(value);
+//         }
 
-        fn pop(&self) -> Option<T> {
-            self.list.pop_front().map(|entry| *entry)
-        }
+//         fn pop(&self) -> Option<T> {
+//             self.list.pop_front().map(|entry| *entry)
+//         }
 
-        fn is_empty(&self) -> bool {
-            self.list.is_empty()
-        }
-    }
-}
+//         fn is_empty(&self) -> bool {
+//             self.list.is_empty()
+//         }
+//     }
+// }
 
 mod rcu_double_list {
     use std::fmt::Debug;
@@ -366,11 +366,13 @@ mod rcu_double_list {
         }
 
         fn push(&self, value: T) {
-            self.list.push_front(value);
+            let guard = &crossbeam_epoch::pin();
+            self.list.push_front(value, guard);
         }
 
         fn pop(&self) -> Option<T> {
-            self.list.pop_front().map(|entry| *entry)
+            let guard = &crossbeam_epoch::pin();
+            self.list.pop_front(guard).map(|entry| *entry)
         }
 
         fn is_empty(&self) -> bool {
@@ -398,11 +400,13 @@ mod rcu_double_list_tail {
         }
 
         fn push(&self, value: T) {
-            self.list.push_back(value);
+            let guard = &crossbeam_epoch::pin();
+            self.list.push_back(value, guard);
         }
 
         fn pop(&self) -> Option<T> {
-            self.list.pop_back().map(|entry| *entry)
+            let guard = &crossbeam_epoch::pin();
+            self.list.pop_back(guard).map(|entry| *entry)
         }
 
         fn is_empty(&self) -> bool {

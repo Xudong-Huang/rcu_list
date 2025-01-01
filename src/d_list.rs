@@ -1,6 +1,6 @@
 use crossbeam_epoch::{Atomic, Guard, Shared};
 
-use alloc::sync::Arc;
+use alloc::boxed::Box;
 use core::ops::Deref;
 use core::sync::atomic::Ordering;
 use core::{cmp, fmt};
@@ -11,25 +11,15 @@ use crate::version_lock::{LockErr, VersionLock};
 /// each doubly linked list node has more than one stuctual references
 /// so we use `Arc` to manage the memory.
 #[derive(Debug)]
-struct ArcPtr<T> {
+struct EpochPtr<T> {
     ptr: Atomic<T>,
 }
 
-impl<T> ArcPtr<T> {
+impl<T> EpochPtr<T> {
     const fn null() -> Self {
         Self {
             ptr: Atomic::null(),
         }
-    }
-
-    // only used in create a new list
-    // the old value must be none
-    fn store_arc(&self, data: Arc<T>) {
-        let guard = unsafe { crossbeam_epoch::unprotected() };
-        assert!(self.ptr.load(Ordering::Relaxed, guard).is_null());
-        let ptr = Arc::into_raw(data);
-        let shared_ptr = Shared::from(ptr);
-        self.ptr.store(shared_ptr, Ordering::Release);
     }
 
     fn read<'g>(&self, guard: &'g Guard) -> Option<&'g T> {
@@ -39,12 +29,12 @@ impl<T> ArcPtr<T> {
 
     fn write<'g>(&self, data: &'g T, guard: &'g Guard) -> Option<&'g T> {
         let shared_ptr = Shared::from(data as *const T);
-        let old = self.ptr.swap(shared_ptr, Ordering::Release, guard);
+        let old = self.ptr.swap(shared_ptr, Ordering::AcqRel, guard);
         unsafe { old.as_ref() }
     }
 
     fn take<'g>(&self, guard: &'g Guard) -> Option<&'g T> {
-        let old = self.ptr.swap(Shared::null(), Ordering::Release, guard);
+        let old = self.ptr.swap(Shared::null(), Ordering::AcqRel, guard);
         unsafe { old.as_ref() }
     }
 
@@ -57,8 +47,8 @@ impl<T> ArcPtr<T> {
 #[repr(align(64))]
 struct Node<T> {
     version: VersionLock,
-    next: ArcPtr<Node<T>>,
-    prev: ArcPtr<Node<T>>,
+    next: EpochPtr<Node<T>>,
+    prev: EpochPtr<Node<T>>,
     // only the head node and tail node has None data
     data: Option<T>,
 }
@@ -67,8 +57,8 @@ impl<T> Default for Node<T> {
     fn default() -> Self {
         Node {
             version: VersionLock::new(),
-            prev: ArcPtr::null(),
-            next: ArcPtr::null(),
+            prev: EpochPtr::null(),
+            next: EpochPtr::null(),
             data: None,
         }
     }
@@ -79,8 +69,8 @@ impl<T> Node<T> {
     fn new(data: T) -> Self {
         Node {
             version: VersionLock::new(),
-            prev: ArcPtr::null(),
-            next: ArcPtr::null(),
+            prev: EpochPtr::null(),
+            next: EpochPtr::null(),
             data: Some(data),
         }
     }
@@ -187,6 +177,7 @@ impl<T> Node<T> {
 }
 
 /// An entry in a `LinkedList`.
+#[derive(Clone, Copy)]
 pub struct Entry<'g, T> {
     list: &'g LinkedList<T>,
     guard: &'g Guard,
@@ -314,8 +305,8 @@ impl<T: Eq> Eq for Entry<'_, T> {}
 /// The readers like `iter`, `front` and `back` don't need to get locks.
 #[derive(Debug)]
 pub struct LinkedList<T> {
-    head: Arc<Node<T>>,
-    tail: Arc<Node<T>>,
+    head: Box<Node<T>>,
+    tail: Box<Node<T>>,
 }
 
 impl<T> Default for LinkedList<T> {
@@ -329,10 +320,6 @@ impl<T> Drop for LinkedList<T> {
         let guard = unsafe { crossbeam_epoch::unprotected() };
         // avoid stack overflow
         while self.pop_front(guard).is_some() {}
-        unsafe {
-            let _ = Arc::from_raw(self.tail.prev.take(guard).unwrap());
-            let _ = Arc::from_raw(self.head.next.take(guard).unwrap());
-        }
     }
 }
 
@@ -340,11 +327,13 @@ impl<T> LinkedList<T> {
     /// Creates a new empty `LinkedList`.
     pub fn new() -> Self {
         // this is only used for list head, should never deref it's data
-        let head = Arc::new(Node::default());
-        let tail = Arc::new(Node::default());
+        let head = Box::new(Node::default());
+        let tail = Box::new(Node::default());
 
-        tail.prev.store_arc(head.clone());
-        head.next.store_arc(tail.clone());
+        let guard = unsafe { crossbeam_epoch::unprotected() };
+
+        tail.prev.write(&head, guard);
+        head.next.write(&tail, guard);
 
         Self { head, tail }
     }
@@ -486,17 +475,17 @@ impl<'a: 'g, 'g, T> EntryImpl<'a, 'g, T> {
 
     /// Replace the entry with new value,
     fn replace(&self, elt: T) -> Result<Entry<'g, T>, T> {
-        let new_node = Arc::new(Node::new(elt));
+        let new_node = Box::new(Node::new(elt));
         new_node.next.write(self.node, self.guard);
 
         let prev_node = match self.node.lock_prev_node(self.guard) {
             Ok(node) => node,
             Err(_) => {
-                let node = Arc::into_inner(new_node).unwrap();
+                let node = *new_node;
                 return Err(node.data.unwrap());
             }
         };
-        let new_node = unsafe { &*Arc::into_raw(new_node) };
+        let new_node = unsafe { &*Box::into_raw(new_node) };
         {
             new_node.set_prev_node(prev_node, self.guard);
             new_node.try_lock().unwrap();
@@ -523,18 +512,18 @@ impl<'a: 'g, 'g, T> EntryImpl<'a, 'g, T> {
     /// insert an element after the entry.
     /// if the entry was removed, the element will be returned in Err()
     fn insert_after(&self, elt: T) -> Result<Entry<'g, T>, T> {
-        let new_node = Arc::new(Node::new(elt));
+        let new_node = Box::new(Node::new(elt));
         new_node.set_prev_node(self.node, self.guard);
 
         let next_node = match self.node.lock(self.guard) {
             Ok(node) => node,
             Err(_) => {
                 // current entry removed, can't insert
-                let n = Arc::into_inner(new_node).unwrap();
+                let n = *new_node;
                 return Err(n.data.unwrap());
             }
         };
-        let new_node = unsafe { &*Arc::into_raw(new_node) };
+        let new_node = unsafe { &*Box::into_raw(new_node) };
         {
             // new_node.try_lock().unwrap();
             {
@@ -580,7 +569,7 @@ impl<'a: 'g, 'g, T> EntryImpl<'a, 'g, T> {
         // recycle the old node
         unsafe {
             self.guard.defer_unchecked(move || {
-                let _ = Arc::from_raw(curr_node as *const Node<T>);
+                let _ = Box::from_raw(curr_node as *const Node<T> as *mut Node<T>);
             });
         }
 
@@ -593,18 +582,18 @@ impl<'a: 'g, 'g, T> EntryImpl<'a, 'g, T> {
 
     /// Insert an element ahead of the entry, and returns the new Entry to it.
     pub fn insert_ahead(&self, elt: T) -> Result<Entry<'g, T>, T> {
-        let new_node = Arc::new(Node::new(elt));
+        let new_node = Box::new(Node::new(elt));
         new_node.next.write(self.node, self.guard);
 
         let prev_node = match self.node.lock_prev_node(self.guard) {
             Ok(node) => node,
             Err(_) => {
-                let node = Arc::into_inner(new_node).unwrap();
+                let node = *new_node;
                 return Err(node.data.unwrap());
             }
         };
         new_node.set_prev_node(prev_node, self.guard);
-        let new_node = unsafe { &*Arc::into_raw(new_node) };
+        let new_node = unsafe { &*Box::into_raw(new_node) };
         {
             // new_node.try_lock().unwrap();
             {
@@ -669,10 +658,7 @@ impl<'a: 'g, 'g, T> EntryImpl<'a, 'g, T> {
             // recycle the old node
             unsafe {
                 self.guard.defer_unchecked(move || {
-                    // drop the prev
-                    let _ = Arc::from_raw(curr_node as *const Node<T>);
-                    // drop the next
-                    // let _ = Arc::from_raw(curr_node as *const Node<T>);
+                    let _ = Box::from_raw(curr_node as *const Node<T> as *mut Node<T>);
                 });
             }
 
