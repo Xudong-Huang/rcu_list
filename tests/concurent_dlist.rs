@@ -18,8 +18,9 @@ fn con_push_back() {
 
             thread::spawn(move || {
                 barrier.wait();
+                let guard = &crossbeam_epoch::pin();
                 for i in 0..ITEMS {
-                    queue.push_back(i);
+                    queue.push_back(i, guard);
                 }
             })
         })
@@ -29,8 +30,9 @@ fn con_push_back() {
         handle.join().unwrap();
     }
 
+    let guard = &crossbeam_epoch::pin();
     for _i in 0..ITEMS * (THREADS) {
-        assert!(queue.pop_front().is_some());
+        assert!(queue.pop_front(guard).is_some());
     }
 
     assert!(queue.is_empty());
@@ -51,8 +53,9 @@ fn con_push_front() {
 
             thread::spawn(move || {
                 barrier.wait();
+                let guard = &crossbeam_epoch::pin();
                 for i in 0..ITEMS {
-                    queue.push_front(i);
+                    queue.push_front(i, guard);
                 }
             })
         })
@@ -62,8 +65,9 @@ fn con_push_front() {
         handle.join().unwrap();
     }
 
+    let guard = &crossbeam_epoch::pin();
     for _i in 0..ITEMS * (THREADS) {
-        assert!(queue.pop_back().is_some());
+        assert!(queue.pop_back(guard).is_some());
     }
 
     assert!(queue.is_empty());
@@ -77,8 +81,10 @@ fn con_pop_front() {
     let queue = Arc::new(LinkedList::new());
     let barrier = Arc::new(Barrier::new(THREADS));
 
+    let guard = &crossbeam_epoch::pin();
+
     for i in 0..ITEMS * (THREADS) {
-        queue.push_back(i);
+        queue.push_back(i, guard);
     }
 
     let handles = (0..THREADS)
@@ -88,8 +94,9 @@ fn con_pop_front() {
 
             thread::spawn(move || {
                 barrier.wait();
+                let guard = &crossbeam_epoch::pin();
                 for _i in 0..ITEMS {
-                    assert!(queue.pop_front().is_some());
+                    assert!(queue.pop_front(guard).is_some());
                 }
             })
         })
@@ -110,8 +117,10 @@ fn con_pop_back() {
     let queue = Arc::new(LinkedList::new());
     let barrier = Arc::new(Barrier::new(THREADS));
 
+    let guard = &crossbeam_epoch::pin();
+
     for i in 0..ITEMS * (THREADS) {
-        queue.push_front(i);
+        queue.push_front(i, guard);
     }
 
     let handles = (0..THREADS)
@@ -121,8 +130,9 @@ fn con_pop_back() {
 
             thread::spawn(move || {
                 barrier.wait();
+                let guard = &crossbeam_epoch::pin();
                 for _i in 0..ITEMS {
-                    assert!(queue.pop_back().is_some());
+                    assert!(queue.pop_back(guard).is_some());
                 }
             })
         })
@@ -150,9 +160,10 @@ fn push_back_pop_back() {
 
             thread::spawn(move || {
                 barrier.wait();
+                let guard = &crossbeam_epoch::pin();
                 for i in 0..ITEMS {
-                    queue.push_back(i);
-                    assert!(queue.pop_back().is_some());
+                    queue.push_back(i, guard);
+                    assert!(queue.pop_back(guard).is_some());
                 }
             })
         })
@@ -180,9 +191,10 @@ fn push_front_pop_front() {
 
             thread::spawn(move || {
                 barrier.wait();
+                let guard = &crossbeam_epoch::pin();
                 for i in 0..ITEMS {
-                    queue.push_front(i);
-                    assert!(queue.pop_front().is_some());
+                    queue.push_front(i, guard);
+                    assert!(queue.pop_front(guard).is_some());
                 }
             })
         })
@@ -210,9 +222,10 @@ fn push_back_pop_front() {
 
             thread::spawn(move || {
                 barrier.wait();
+                let guard = &crossbeam_epoch::pin();
                 for i in 0..ITEMS {
-                    queue.push_back(i);
-                    assert!(queue.pop_front().is_some());
+                    queue.push_back(i, guard);
+                    assert!(queue.pop_front(guard).is_some());
                 }
             })
         })
@@ -240,9 +253,10 @@ fn push_front_pop_back() {
 
             thread::spawn(move || {
                 barrier.wait();
+                let guard = &crossbeam_epoch::pin();
                 for i in 0..ITEMS {
-                    queue.push_front(i);
-                    assert!(queue.pop_back().is_some());
+                    queue.push_front(i, guard);
+                    assert!(queue.pop_back(guard).is_some());
                 }
             })
         })

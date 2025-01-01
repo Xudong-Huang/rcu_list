@@ -1,17 +1,64 @@
-use alloc::sync::{Arc, Weak};
-use rcu_cell::{RcuCell, RcuWeak};
+use crossbeam_epoch::{Atomic, Guard, Shared};
 
+use alloc::sync::Arc;
 use core::ops::Deref;
+use core::sync::atomic::Ordering;
 use core::{cmp, fmt};
 
 use crate::version_lock::{LockErr, VersionLock};
+
+/// A node ptr that actually stores `Arc<T>` in it.
+/// each doubly linked list node has more than one stuctual references
+/// so we use `Arc` to manage the memory.
+#[derive(Debug)]
+struct ArcPtr<T> {
+    ptr: Atomic<T>,
+}
+
+impl<T> ArcPtr<T> {
+    const fn null() -> Self {
+        Self {
+            ptr: Atomic::null(),
+        }
+    }
+
+    // only used in create a new list
+    // the old value must be none
+    fn store_arc(&self, data: Arc<T>) {
+        let guard = unsafe { crossbeam_epoch::unprotected() };
+        assert!(self.ptr.load(Ordering::Relaxed, guard).is_null());
+        let ptr = Arc::into_raw(data);
+        let shared_ptr = Shared::from(ptr);
+        self.ptr.store(shared_ptr, Ordering::Release);
+    }
+
+    fn read<'g>(&self, guard: &'g Guard) -> Option<&'g T> {
+        let shared = self.ptr.load(Ordering::Acquire, guard);
+        unsafe { shared.as_ref() }
+    }
+
+    fn write<'g>(&self, data: &'g T, guard: &'g Guard) -> Option<&'g T> {
+        let shared_ptr = Shared::from(data as *const T);
+        let old = self.ptr.swap(shared_ptr, Ordering::Release, guard);
+        unsafe { old.as_ref() }
+    }
+
+    fn take<'g>(&self, guard: &'g Guard) -> Option<&'g T> {
+        let old = self.ptr.swap(Shared::null(), Ordering::Release, guard);
+        unsafe { old.as_ref() }
+    }
+
+    fn ptr_eq(&self, data: &T, guard: &Guard) -> bool {
+        self.ptr.load(Ordering::Relaxed, guard).as_raw() == data
+    }
+}
 
 #[derive(Debug)]
 #[repr(align(64))]
 struct Node<T> {
     version: VersionLock,
-    next: RcuCell<Node<T>>,
-    prev: RcuWeak<Node<T>>,
+    next: ArcPtr<Node<T>>,
+    prev: ArcPtr<Node<T>>,
     // only the head node and tail node has None data
     data: Option<T>,
 }
@@ -20,8 +67,8 @@ impl<T> Default for Node<T> {
     fn default() -> Self {
         Node {
             version: VersionLock::new(),
-            prev: RcuWeak::new(),
-            next: RcuCell::none(),
+            prev: ArcPtr::null(),
+            next: ArcPtr::null(),
             data: None,
         }
     }
@@ -32,8 +79,8 @@ impl<T> Node<T> {
     fn new(data: T) -> Self {
         Node {
             version: VersionLock::new(),
-            prev: RcuWeak::new(),
-            next: RcuCell::none(),
+            prev: ArcPtr::null(),
+            next: ArcPtr::null(),
             data: Some(data),
         }
     }
@@ -45,10 +92,10 @@ impl<T> Node<T> {
 
     // lock the current node and return it's next node
     #[inline]
-    fn lock(self: &Arc<Self>) -> Result<Arc<Node<T>>, LockErr> {
+    fn lock<'g>(&self, guard: &'g Guard) -> Result<&'g Node<T>, LockErr> {
         self.version.lock()?;
-        let next_node = self.next_node();
-        assert!(next_node.prev_eq(self));
+        let next_node = self.next_node(guard);
+        assert!(next_node.prev_eq(self, guard));
         Ok(next_node)
     }
 
@@ -68,35 +115,35 @@ impl<T> Node<T> {
     }
 
     #[inline]
-    fn prev_node(&self) -> Option<Arc<Node<T>>> {
-        self.prev.upgrade()
+    fn prev_node<'g>(&self, guard: &'g Guard) -> Option<&'g Node<T>> {
+        self.prev.read(guard)
     }
 
     #[inline]
-    fn prev_eq(&self, prev: &Arc<Node<T>>) -> bool {
-        self.prev.arc_eq(prev)
+    fn prev_eq(&self, prev: &Node<T>, guard: &Guard) -> bool {
+        self.prev.ptr_eq(prev, guard)
     }
 
     #[inline]
-    fn set_prev_node(&self, prev: &Arc<Node<T>>) -> Weak<Node<T>> {
-        self.prev.write_arc(prev)
+    fn set_prev_node<'g>(&self, prev: &'g Node<T>, guard: &'g Guard) -> Option<&'g Node<T>> {
+        self.prev.write(prev, guard)
     }
 
     #[inline]
-    fn clear_prev_node(&self) {
-        self.prev.take();
+    fn clear_prev_node(&self, guard: &Guard) {
+        self.prev.take(guard);
     }
 
     #[inline]
-    fn next_node(&self) -> Arc<Node<T>> {
+    fn next_node<'g>(&self, guard: &'g Guard) -> &'g Node<T> {
         // Safety: the next node is always valid except for the tail node
-        self.next.read().unwrap()
+        self.next.read(guard).unwrap()
     }
 
-    fn lock_prev_node(self: &Arc<Self>) -> Result<Arc<Node<T>>, LockErr> {
+    fn lock_prev_node<'g>(&self, guard: &'g Guard) -> Result<&'g Node<T>, LockErr> {
         let backoff = crossbeam_utils::Backoff::new();
         loop {
-            let prev_node = match self.prev_node() {
+            let prev_node = match self.prev_node(guard) {
                 // something wrong, like the prev node is dropped,
                 // or the current node is removed
                 None => {
@@ -113,7 +160,7 @@ impl<T> Node<T> {
             };
 
             // if the prev node is removed, try again
-            if prev_node.lock().is_err() {
+            if prev_node.lock(guard).is_err() {
                 backoff.spin();
                 continue;
             }
@@ -125,13 +172,13 @@ impl<T> Node<T> {
             }
 
             // if the prev node is changed, try again
-            if !prev_node.next.arc_eq(self) {
+            if !prev_node.next.ptr_eq(self, guard) {
                 prev_node.unlock();
                 backoff.reset();
                 continue;
             }
 
-            assert!(self.prev_eq(&prev_node));
+            assert!(self.prev_eq(prev_node, guard));
 
             // successfully lock the prev node
             return Ok(prev_node);
@@ -140,46 +187,46 @@ impl<T> Node<T> {
 }
 
 /// An entry in a `LinkedList`.
-#[derive(Clone)]
-pub struct Entry<'a, T> {
-    list: &'a LinkedList<T>,
-    node: Arc<Node<T>>,
+pub struct Entry<'g, T> {
+    list: &'g LinkedList<T>,
+    guard: &'g Guard,
+    node: &'g Node<T>,
 }
 
-impl<'a, T> Entry<'a, T> {
+impl<'g, T> Entry<'g, T> {
     /// Replace the entry with new value,
     /// and return the old Entry which is marked as removed.
     /// If the node is alredy removed, return the passed in value in Err().
     /// Internally we create a new node to replace the old entry
-    pub fn replace(&self, elt: T) -> Result<Entry<'a, T>, T> {
-        EntryImpl::new(self.list, &self.node).replace(elt)
+    pub fn replace(&self, elt: T) -> Result<Entry<'g, T>, T> {
+        EntryImpl::new(self.list, self.node, self.guard).replace(elt)
     }
 
     /// Remove the entry from the list.
     pub fn remove(&self) {
-        EntryImpl::new(self.list, &self.node).remove()
+        EntryImpl::new(self.list, self.node, self.guard).remove()
     }
 
     /// insert an element after the entry.
     /// if the entry was removed, the element will be returned in Err()
-    pub fn insert_after(&self, elt: T) -> Result<Entry<'a, T>, T> {
-        EntryImpl::new(self.list, &self.node).insert_after(elt)
+    pub fn insert_after(&self, elt: T) -> Result<Entry<'g, T>, T> {
+        EntryImpl::new(self.list, self.node, self.guard).insert_after(elt)
     }
 
     /// insert an element ahead the entry.
     /// if the entry was removed, the element will be returned in Err()
-    pub fn insert_ahead(&self, elt: T) -> Result<Entry<'a, T>, T> {
-        EntryImpl::new(self.list, &self.node).insert_ahead(elt)
+    pub fn insert_ahead(&self, elt: T) -> Result<Entry<'g, T>, T> {
+        EntryImpl::new(self.list, self.node, self.guard).insert_ahead(elt)
     }
 
     /// Remove the entry after this entry.
-    pub fn remove_after(&self) -> Option<Entry<'a, T>> {
-        EntryImpl::new(self.list, &self.node).remove_after()
+    pub fn remove_after(&self) -> Option<Entry<'g, T>> {
+        EntryImpl::new(self.list, self.node, self.guard).remove_after()
     }
 
     /// Remove the entry ahead this entry.
-    pub fn remove_ahead(&self) -> Option<Entry<'a, T>> {
-        EntryImpl::new(self.list, &self.node).remove_ahead()
+    pub fn remove_ahead(&self) -> Option<Entry<'g, T>> {
+        EntryImpl::new(self.list, self.node, self.guard).remove_ahead()
     }
 
     /// Returns true if the entry is removed.
@@ -189,18 +236,19 @@ impl<'a, T> Entry<'a, T> {
 
     /// Returns the next entry in the list.
     /// Returns `None` if the entry is removed.
-    pub fn next(&self) -> Option<Entry<'a, T>> {
+    pub fn next(&self) -> Option<Entry<'g, T>> {
         if self.is_removed() {
             return None;
         }
 
-        let next = self.node.next.read()?;
-        if Arc::ptr_eq(&self.node, &self.list.tail) {
+        let next = self.node.next.read(self.guard)?;
+        if core::ptr::addr_eq(self.node, self.list.tail.as_ref()) {
             // we will not return the tail node as an entry
             return None;
         }
         Some(Entry {
             list: self.list,
+            guard: self.guard,
             node: next,
         })
     }
@@ -278,8 +326,13 @@ impl<T> Default for LinkedList<T> {
 
 impl<T> Drop for LinkedList<T> {
     fn drop(&mut self) {
+        let guard = unsafe { crossbeam_epoch::unprotected() };
         // avoid stack overflow
-        while self.pop_front().is_some() {}
+        while self.pop_front(guard).is_some() {}
+        unsafe {
+            let _ = Arc::from_raw(self.tail.prev.take(guard).unwrap());
+            let _ = Arc::from_raw(self.head.next.take(guard).unwrap());
+        }
     }
 }
 
@@ -290,8 +343,8 @@ impl<T> LinkedList<T> {
         let head = Arc::new(Node::default());
         let tail = Arc::new(Node::default());
 
-        tail.set_prev_node(&head);
-        head.next.write(tail.clone());
+        tail.prev.store_arc(head.clone());
+        head.next.store_arc(tail.clone());
 
         Self { head, tail }
     }
@@ -299,24 +352,29 @@ impl<T> LinkedList<T> {
     /// Returns true if the list is empty.
     #[inline]
     pub fn is_empty(&self) -> bool {
-        self.head.next.arc_eq(&self.tail)
+        let guard = unsafe { crossbeam_epoch::unprotected() };
+        self.head.next.ptr_eq(&self.tail, guard)
     }
 
     /// Returns an Entry to the front element, or `None` if the list is empty.
     #[inline]
-    pub fn front(&self) -> Option<Entry<T>> {
+    pub fn front<'l: 'g, 'g>(&'l self, guard: &'g Guard) -> Option<Entry<'g, T>> {
         // head.next is always non empty
-        let node = self.head.next_node();
+        let node = self.head.next_node(guard);
         // only the tail has None data
-        node.data.is_some().then(|| Entry { list: self, node })
+        node.data.is_some().then_some(Entry {
+            list: self,
+            node,
+            guard,
+        })
     }
 
     /// Returns an Entry to the back element, or `None` if the list is empty.
     #[inline]
-    pub fn back(&self) -> Option<Entry<T>> {
+    pub fn back<'l: 'g, 'g>(&'l self, guard: &'g Guard) -> Option<Entry<'g, T>> {
         // tail.prev is always non empty
         let node = loop {
-            match self.tail.prev_node() {
+            match self.tail.prev_node(guard) {
                 Some(node) => break node,
                 // the prev node is dropped
                 // try again for a valid prev node
@@ -324,41 +382,46 @@ impl<T> LinkedList<T> {
             }
         };
         // only the head has None data
-        node.data.is_some().then(|| Entry { list: self, node })
+        node.data.is_some().then_some(Entry {
+            list: self,
+            node,
+            guard,
+        })
     }
 
     /// Pushes an element to the front of the list, and returns an Entry to it.
-    pub fn push_front(&self, elt: T) -> Entry<T> {
-        match EntryImpl::new(self, &self.head).insert_after(elt) {
+    pub fn push_front<'l: 'g, 'g>(&'l self, elt: T, guard: &'g Guard) -> Entry<'g, T> {
+        match EntryImpl::new(self, &self.head, guard).insert_after(elt) {
             Ok(entry) => entry,
             Err(_) => unreachable!("push_front should always success"),
         }
     }
 
     /// Pops the front element of the list, returns `None` if the list is empty.
-    pub fn pop_front(&self) -> Option<Entry<T>> {
-        EntryImpl::new(self, &self.head).remove_after()
+    pub fn pop_front<'l: 'g, 'g>(&'l self, guard: &'g Guard) -> Option<Entry<'g, T>> {
+        EntryImpl::new(self, &self.head, guard).remove_after()
     }
 
     /// Pushes an element to the back of the list, and returns an Entry to it.
-    pub fn push_back(&self, elt: T) -> Entry<T> {
-        match EntryImpl::new(self, &self.tail).insert_ahead(elt) {
+    pub fn push_back<'l: 'g, 'g>(&'l self, elt: T, guard: &'g Guard) -> Entry<'g, T> {
+        match EntryImpl::new(self, &self.tail, guard).insert_ahead(elt) {
             Ok(entry) => entry,
             Err(_) => unreachable!("push_back should always success"),
         }
     }
 
     /// Pops the back element of the list, returns `None` if the list is empty.
-    pub fn pop_back(&self) -> Option<Entry<T>> {
-        EntryImpl::new(self, &self.tail).remove_ahead()
+    pub fn pop_back<'l: 'g, 'g>(&'l self, guard: &'g Guard) -> Option<Entry<'g, T>> {
+        EntryImpl::new(self, &self.tail, guard).remove_ahead()
     }
 
     /// Returns an iterator over the elements of the list.
     #[inline]
-    pub fn iter(&self) -> Iter<T> {
+    pub fn iter<'l: 'g, 'g>(&'l self, guard: &'g Guard) -> Iter<'l, 'g, T> {
         Iter {
             list: self,
-            curr: self.head.clone(),
+            curr: &self.head,
+            guard,
         }
     }
 }
@@ -367,116 +430,103 @@ impl<T> LinkedList<T> {
 ///
 /// This `struct` is created by [`LinkedList::iter()`]. See its
 /// documentation for more.
-pub struct Iter<'a, T: 'a> {
-    list: &'a LinkedList<T>,
-    curr: Arc<Node<T>>,
+pub struct Iter<'l: 'g, 'g, T: 'l> {
+    list: &'l LinkedList<T>,
+    curr: &'g Node<T>,
+    guard: &'g Guard,
 }
 
-impl<'a, T> Iterator for Iter<'a, T> {
-    type Item = Entry<'a, T>;
+impl<'g, T> Iterator for Iter<'_, 'g, T> {
+    type Item = Entry<'g, T>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let next_node = self.curr.next.read()?;
-        self.curr = next_node.clone();
-        next_node.data.is_some().then(|| Entry {
+        let next_node = self.curr.next.read(self.guard)?;
+        self.curr = next_node;
+        next_node.data.is_some().then_some(Entry {
             list: self.list,
             node: next_node,
+            guard: self.guard,
         })
     }
 }
 
-struct EntryImpl<'a, 'b, T> {
+struct EntryImpl<'a, 'g, T> {
     list: &'a LinkedList<T>,
-    node: &'b Arc<Node<T>>,
+    node: &'g Node<T>,
+    guard: &'g Guard,
 }
 
-impl<'a, 'b, T> EntryImpl<'a, 'b, T> {
+impl<'a: 'g, 'g, T> EntryImpl<'a, 'g, T> {
     #[inline]
-    fn new(list: &'a LinkedList<T>, node: &'b Arc<Node<T>>) -> Self {
-        Self { list, node }
+    fn new(list: &'a LinkedList<T>, node: &'g Node<T>, guard: &'g Guard) -> Self {
+        Self { list, node, guard }
     }
 
     /// Remove the entry from the list.
     fn remove(self) {
         let curr_node = self.node;
-        let prev_node = match curr_node.lock_prev_node() {
+        let prev_node = match curr_node.lock_prev_node(self.guard) {
             Ok(node) => node,
             // the current node is already removed
             Err(_) => return,
         };
 
-        // move the drop out of locks
-        let old_node_prev;
-        let old_prev_next;
-
         {
             // unwrap safety: the prev node is locked
-            let next_node = curr_node.lock().unwrap();
+            let next_node = curr_node.lock(self.guard).unwrap();
             {
-                old_node_prev = next_node.set_prev_node(&prev_node);
-                old_prev_next = prev_node.next.write(next_node);
+                next_node.set_prev_node(prev_node, self.guard);
+                prev_node.next.write(next_node, self.guard);
             }
             curr_node.unlock_remove();
-            curr_node.clear_prev_node();
+            curr_node.clear_prev_node(self.guard);
         }
         prev_node.unlock();
-
-        drop(old_node_prev);
-        drop(old_prev_next);
     }
 
     /// Replace the entry with new value,
-    fn replace(&self, elt: T) -> Result<Entry<'a, T>, T> {
+    fn replace(&self, elt: T) -> Result<Entry<'g, T>, T> {
         let new_node = Arc::new(Node::new(elt));
-        new_node.next.write(self.node.clone());
+        new_node.next.write(self.node, self.guard);
 
-        // move the drop out of locks
-        let old_node_prev;
-        let old_prev_next;
-
-        let prev_node = match self.node.lock_prev_node() {
+        let prev_node = match self.node.lock_prev_node(self.guard) {
             Ok(node) => node,
             Err(_) => {
                 let node = Arc::into_inner(new_node).unwrap();
                 return Err(node.data.unwrap());
             }
         };
+        let new_node = unsafe { &*Arc::into_raw(new_node) };
         {
-            new_node.set_prev_node(&prev_node);
+            new_node.set_prev_node(prev_node, self.guard);
             new_node.try_lock().unwrap();
-            self.node.lock().unwrap();
+            self.node.lock(self.guard).unwrap();
             {
-                let next_node = self.node.next_node();
-                old_node_prev = next_node.set_prev_node(&new_node);
-                new_node.next.write(next_node.clone());
-                old_prev_next = prev_node.next.write(new_node.clone());
+                let next_node = self.node.next_node(self.guard);
+                next_node.set_prev_node(new_node, self.guard);
+                new_node.next.write(next_node, self.guard);
+                prev_node.next.write(new_node, self.guard);
             }
             self.node.unlock_remove();
             new_node.unlock();
-            self.node.clear_prev_node();
+            self.node.clear_prev_node(self.guard);
         }
         prev_node.unlock();
-
-        drop(old_node_prev);
-        drop(old_prev_next);
 
         Ok(Entry {
             list: self.list,
             node: new_node,
+            guard: self.guard,
         })
     }
 
     /// insert an element after the entry.
     /// if the entry was removed, the element will be returned in Err()
-    fn insert_after(&self, elt: T) -> Result<Entry<'a, T>, T> {
+    fn insert_after(&self, elt: T) -> Result<Entry<'g, T>, T> {
         let new_node = Arc::new(Node::new(elt));
-        new_node.set_prev_node(self.node);
+        new_node.set_prev_node(self.node, self.guard);
 
-        // move the drop out of locks
-        let old_next_prev;
-        let old_head_next;
-
-        let next_node = match self.node.lock() {
+        let next_node = match self.node.lock(self.guard) {
             Ok(node) => node,
             Err(_) => {
                 // current entry removed, can't insert
@@ -484,109 +534,98 @@ impl<'a, 'b, T> EntryImpl<'a, 'b, T> {
                 return Err(n.data.unwrap());
             }
         };
+        let new_node = unsafe { &*Arc::into_raw(new_node) };
         {
             // new_node.try_lock().unwrap();
             {
-                new_node.next.write(next_node.clone());
-                old_next_prev = next_node.set_prev_node(&new_node);
-                old_head_next = self.node.next.write(new_node.clone());
+                new_node.next.write(next_node, self.guard);
+                next_node.set_prev_node(new_node, self.guard);
+                self.node.next.write(new_node, self.guard);
             }
             // new_node.unlock();
         }
         self.node.unlock();
 
-        drop(old_next_prev);
-        drop(old_head_next);
-
         Ok(Entry {
             list: self.list,
             node: new_node,
+            guard: self.guard,
         })
     }
 
     /// remove element after this entry
-    fn remove_after(&self) -> Option<Entry<'a, T>> {
-        // move the drop out of locks
-        let old_next_prev;
-        let old_head_next;
-
-        let curr_node = match self.node.lock() {
+    fn remove_after(&self) -> Option<Entry<'g, T>> {
+        let curr_node = match self.node.lock(self.guard) {
             Ok(node) => node,
             Err(_) => return None,
         };
         {
             // there is no element after entry
-            if Arc::ptr_eq(&curr_node, &self.list.tail) {
+            if core::ptr::eq(curr_node, self.list.tail.as_ref()) {
                 self.node.unlock();
                 return None;
             }
 
             // unwrap safety: next must be valid since it's still in the list
-            let next_node = curr_node.lock().unwrap();
+            let next_node = curr_node.lock(self.guard).unwrap();
             {
-                old_next_prev = next_node.set_prev_node(self.node);
-                old_head_next = self.node.next.write(next_node.clone());
+                next_node.set_prev_node(self.node, self.guard);
+                self.node.next.write(next_node, self.guard);
             }
             curr_node.unlock_remove();
-            curr_node.clear_prev_node();
+            curr_node.clear_prev_node(self.guard);
         }
         self.node.unlock();
 
-        // don't clear the next field, could break the iterator
-        // curr_node.next.take();
-        drop(old_next_prev);
-        drop(old_head_next);
+        // recycle the old node
+        unsafe {
+            self.guard.defer_unchecked(move || {
+                let _ = Arc::from_raw(curr_node as *const Node<T>);
+            });
+        }
 
         Some(Entry {
             list: self.list,
             node: curr_node,
+            guard: self.guard,
         })
     }
 
     /// Insert an element ahead of the entry, and returns the new Entry to it.
-    pub fn insert_ahead(&self, elt: T) -> Result<Entry<'a, T>, T> {
+    pub fn insert_ahead(&self, elt: T) -> Result<Entry<'g, T>, T> {
         let new_node = Arc::new(Node::new(elt));
-        new_node.next.write(self.node.clone());
+        new_node.next.write(self.node, self.guard);
 
-        // move the drop out of locks
-        let old_node_prev;
-        let old_prev_next;
-
-        let prev_node = match self.node.lock_prev_node() {
+        let prev_node = match self.node.lock_prev_node(self.guard) {
             Ok(node) => node,
             Err(_) => {
                 let node = Arc::into_inner(new_node).unwrap();
                 return Err(node.data.unwrap());
             }
         };
+        new_node.set_prev_node(prev_node, self.guard);
+        let new_node = unsafe { &*Arc::into_raw(new_node) };
         {
-            new_node.set_prev_node(&prev_node);
             // new_node.try_lock().unwrap();
             {
-                old_node_prev = self.node.set_prev_node(&new_node);
-                old_prev_next = prev_node.next.write(new_node.clone());
+                self.node.set_prev_node(new_node, self.guard);
+                prev_node.next.write(new_node, self.guard);
             }
             // new_node.unlock();
         }
         prev_node.unlock();
 
-        drop(old_node_prev);
-        drop(old_prev_next);
-
         Ok(Entry {
             list: self.list,
             node: new_node,
+            guard: self.guard,
         })
     }
 
     /// Remove the element ahead of the entry, returns `None` if the list is empty.
-    fn remove_ahead(&self) -> Option<Entry<'a, T>> {
+    fn remove_ahead(&self) -> Option<Entry<'g, T>> {
         loop {
-            // move the drop out of locks
-            let old_node_prev;
-            let old_prev_next;
-
-            let curr_node = match self.node.prev_node() {
+            let curr_node = match self.node.prev_node(self.guard) {
                 Some(node) => node,
                 None => {
                     if self.node.is_removed() {
@@ -598,41 +637,49 @@ impl<'a, 'b, T> EntryImpl<'a, 'b, T> {
             };
 
             // the list is empty
-            if Arc::ptr_eq(&curr_node, &self.list.head) {
+            if core::ptr::eq(curr_node, self.list.head.as_ref()) {
                 return None;
             }
 
             // try to lock the node.prev.prev node
-            let prev_node = match curr_node.lock_prev_node() {
+            let prev_node = match curr_node.lock_prev_node(self.guard) {
                 Ok(node) => node,
                 Err(_) => continue,
             };
 
             {
                 // lock the curr node, curr node is not removed
-                let next_node = curr_node.lock().unwrap();
+                let next_node = curr_node.lock(self.guard).unwrap();
                 {
                     // after lock curr_node some thing changed, try again
-                    if !Arc::ptr_eq(&next_node, self.node) {
+                    if !core::ptr::eq(next_node, self.node) {
                         curr_node.unlock();
                         prev_node.unlock();
                         continue;
                     }
 
-                    old_node_prev = self.node.set_prev_node(&prev_node);
-                    old_prev_next = prev_node.next.write(next_node);
+                    self.node.set_prev_node(prev_node, self.guard);
+                    prev_node.next.write(next_node, self.guard);
                 }
                 curr_node.unlock_remove();
-                curr_node.clear_prev_node();
+                curr_node.clear_prev_node(self.guard);
             }
             prev_node.unlock();
 
-            drop(old_node_prev);
-            drop(old_prev_next);
+            // recycle the old node
+            unsafe {
+                self.guard.defer_unchecked(move || {
+                    // drop the prev
+                    let _ = Arc::from_raw(curr_node as *const Node<T>);
+                    // drop the next
+                    // let _ = Arc::from_raw(curr_node as *const Node<T>);
+                });
+            }
 
             return Some(Entry {
                 list: self.list,
                 node: curr_node,
+                guard: self.guard,
             });
         }
     }
@@ -645,22 +692,24 @@ mod tests {
         let list = super::LinkedList::new();
         assert!(list.is_empty());
 
-        list.push_back(1);
+        let guard = &crossbeam_epoch::pin();
+
+        list.push_back(1, guard);
         assert!(!list.is_empty());
-        assert_eq!(*list.front().unwrap(), 1);
-        assert_eq!(*list.back().unwrap(), 1);
+        assert_eq!(*list.front(guard).unwrap(), 1);
+        assert_eq!(*list.back(guard).unwrap(), 1);
 
-        list.push_back(2);
-        assert_eq!(*list.front().unwrap(), 1);
-        assert_eq!(*list.back().unwrap(), 2);
+        list.push_back(2, guard);
+        assert_eq!(*list.front(guard).unwrap(), 1);
+        assert_eq!(*list.back(guard).unwrap(), 2);
 
-        list.push_front(0);
-        assert_eq!(*list.front().unwrap(), 0);
-        assert_eq!(*list.back().unwrap(), 2);
+        list.push_front(0, guard);
+        assert_eq!(*list.front(guard).unwrap(), 0);
+        assert_eq!(*list.back(guard).unwrap(), 2);
 
-        assert_eq!(*list.pop_front().unwrap(), 0);
-        assert_eq!(*list.pop_front().unwrap(), 1);
-        assert_eq!(*list.pop_front().unwrap(), 2);
+        assert_eq!(*list.pop_front(guard).unwrap(), 0);
+        assert_eq!(*list.pop_front(guard).unwrap(), 1);
+        assert_eq!(*list.pop_front(guard).unwrap(), 2);
         assert!(list.is_empty());
     }
 
@@ -669,45 +718,53 @@ mod tests {
         let list = super::LinkedList::new();
         assert!(list.is_empty());
 
-        list.push_front(1);
+        let guard = &crossbeam_epoch::pin();
+
+        list.push_front(1, guard);
         assert!(!list.is_empty());
-        assert_eq!(*list.front().unwrap(), 1);
-        assert_eq!(*list.back().unwrap(), 1);
+        assert_eq!(*list.front(guard).unwrap(), 1);
+        assert_eq!(*list.back(guard).unwrap(), 1);
 
-        list.push_front(2);
-        assert_eq!(*list.front().unwrap(), 2);
-        assert_eq!(*list.back().unwrap(), 1);
+        list.push_front(2, guard);
+        assert_eq!(*list.front(guard).unwrap(), 2);
+        assert_eq!(*list.back(guard).unwrap(), 1);
 
-        list.push_back(0);
-        assert_eq!(*list.front().unwrap(), 2);
-        assert_eq!(*list.back().unwrap(), 0);
+        list.push_back(0, guard);
+        assert_eq!(*list.front(guard).unwrap(), 2);
+        assert_eq!(*list.back(guard).unwrap(), 0);
 
-        assert_eq!(*list.pop_back().unwrap(), 0);
-        assert_eq!(*list.pop_back().unwrap(), 1);
-        assert_eq!(*list.pop_back().unwrap(), 2);
+        assert_eq!(*list.pop_back(guard).unwrap(), 0);
+        assert_eq!(*list.pop_back(guard).unwrap(), 1);
+        assert_eq!(*list.pop_back(guard).unwrap(), 2);
         assert!(list.is_empty());
     }
 
     #[test]
     fn test_remove_entry() {
         let list = super::LinkedList::new();
-        let entry = list.push_back(1);
+
+        let guard = &crossbeam_epoch::pin();
+
+        let entry = list.push_back(1, guard);
         assert!(!entry.is_removed());
         assert!(*entry == 1);
         entry.remove();
         assert!(list.is_empty());
-        assert!(list.front().is_none());
-        assert!(list.back().is_none());
+        assert!(list.front(guard).is_none());
+        assert!(list.back(guard).is_none());
     }
 
     #[test]
     fn test_iter() {
         let list = super::LinkedList::new();
-        list.push_back(1);
-        list.push_back(2);
-        list.push_back(3);
 
-        let mut iter = list.iter();
+        let guard = &crossbeam_epoch::pin();
+
+        list.push_back(1, guard);
+        list.push_back(2, guard);
+        list.push_back(3, guard);
+
+        let mut iter = list.iter(guard);
         assert_eq!(*iter.next().unwrap(), 1);
         assert_eq!(*iter.next().unwrap(), 2);
         assert_eq!(*iter.next().unwrap(), 3);
@@ -717,13 +774,16 @@ mod tests {
     #[test]
     fn entry_remove() {
         let list = super::LinkedList::new();
-        list.push_back(1);
-        let entry = list.push_back(2);
-        list.push_back(3);
+
+        let guard = &crossbeam_epoch::pin();
+
+        list.push_back(1, guard);
+        let entry = list.push_back(2, guard);
+        list.push_back(3, guard);
 
         entry.remove();
 
-        let mut iter = list.iter();
+        let mut iter = list.iter(guard);
         assert_eq!(*iter.next().unwrap(), 1);
         assert_eq!(*iter.next().unwrap(), 3);
         assert!(iter.next().is_none());
@@ -732,13 +792,15 @@ mod tests {
     #[test]
     fn entry_insert_after() {
         let list = super::LinkedList::new();
-        list.push_back(1);
-        let entry = list.push_back(2);
-        list.push_back(3);
+
+        let guard = &crossbeam_epoch::pin();
+        list.push_back(1, guard);
+        let entry = list.push_back(2, guard);
+        list.push_back(3, guard);
 
         entry.insert_after(100).unwrap();
 
-        let mut iter = list.iter();
+        let mut iter = list.iter(guard);
         assert_eq!(*iter.next().unwrap(), 1);
         assert_eq!(*iter.next().unwrap(), 2);
         assert_eq!(*iter.next().unwrap(), 100);
@@ -749,13 +811,16 @@ mod tests {
     #[test]
     fn entry_insert_after_remove() {
         let list = super::LinkedList::new();
-        list.push_back(1);
-        let entry = list.push_back(2);
-        list.push_back(3);
+
+        let guard = &crossbeam_epoch::pin();
+
+        list.push_back(1, guard);
+        let entry = list.push_back(2, guard);
+        list.push_back(3, guard);
 
         assert_eq!(*entry.insert_after(100).unwrap(), 100);
 
-        let mut iter = list.iter();
+        let mut iter = list.iter(guard);
         let find_entry = iter.find(|e| **e == 2).unwrap();
         find_entry.remove();
 
@@ -781,8 +846,10 @@ mod tests {
         }
         let list = super::LinkedList::new();
 
+        let guard = &crossbeam_epoch::pin();
+
         for i in 0..100 {
-            list.push_back(Foo::new(i));
+            list.push_back(Foo::new(i), guard);
         }
 
         drop(list);
@@ -792,15 +859,18 @@ mod tests {
     #[test]
     fn entry_replace() {
         let list = super::LinkedList::new();
-        list.push_back(1);
-        let entry = list.push_back(2);
-        list.push_back(3);
+
+        let guard = &crossbeam_epoch::pin();
+
+        list.push_back(1, guard);
+        let entry = list.push_back(2, guard);
+        list.push_back(3, guard);
 
         let new_entry = entry.replace(100).unwrap();
         assert!(entry.is_removed());
         assert_eq!(*new_entry, 100);
 
-        let mut iter = list.iter();
+        let mut iter = list.iter(guard);
         assert_eq!(*iter.next().unwrap(), 1);
         assert_eq!(*iter.next().unwrap(), 100);
         assert_eq!(*iter.next().unwrap(), 3);
