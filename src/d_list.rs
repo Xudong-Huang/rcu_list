@@ -22,6 +22,16 @@ impl<T> EpochPtr<T> {
         }
     }
 
+    fn create<'a>(data: Box<T>) -> &'a T {
+        let ptr = Box::into_raw(data);
+        unsafe { &*ptr }
+    }
+
+    fn destroy(data: &T, guard: &Guard) {
+        let shared = Shared::from(data as *const T);
+        unsafe { guard.defer_destroy(shared) };
+    }
+
     fn read<'g>(&self, guard: &'g Guard) -> Option<&'g T> {
         let shared = self.ptr.load(Ordering::Acquire, guard);
         unsafe { shared.as_ref() }
@@ -297,7 +307,6 @@ impl<T> Default for LinkedList<T> {
 impl<T> Drop for LinkedList<T> {
     fn drop(&mut self) {
         let guard = unsafe { crossbeam_epoch::unprotected() };
-        // avoid stack overflow
         while self.pop_front(guard).is_some() {}
     }
 }
@@ -514,7 +523,7 @@ impl<'a: 'g, 'g, T> EntryImpl<'a, 'g, T> {
                 return Err(node.data.unwrap());
             }
         };
-        let new_node = unsafe { &*Box::into_raw(new_node) };
+        let new_node = EpochPtr::create(new_node);
         {
             new_node.set_prev_node(prev_node);
             new_node.try_lock().unwrap();
@@ -551,7 +560,7 @@ impl<'a: 'g, 'g, T> EntryImpl<'a, 'g, T> {
                 return Err(n.data.unwrap());
             }
         };
-        let new_node = unsafe { &*Box::into_raw(new_node) };
+        let new_node = EpochPtr::create(new_node);
         {
             // new_node.try_lock().unwrap();
             {
@@ -594,11 +603,7 @@ impl<'a: 'g, 'g, T> EntryImpl<'a, 'g, T> {
         self.node.unlock();
 
         // recycle the old node
-        unsafe {
-            self.guard.defer_unchecked(move || {
-                let _ = Box::from_raw(curr_node as *const Node<T> as *mut Node<T>);
-            });
-        }
+        EpochPtr::destroy(curr_node, self.guard);
 
         Some(Entry {
             list: self.list,
@@ -620,7 +625,7 @@ impl<'a: 'g, 'g, T> EntryImpl<'a, 'g, T> {
             }
         };
         new_node.set_prev_node(prev_node);
-        let new_node = unsafe { &*Box::into_raw(new_node) };
+        let new_node = EpochPtr::create(new_node);
         {
             // new_node.try_lock().unwrap();
             {
@@ -677,11 +682,7 @@ impl<'a: 'g, 'g, T> EntryImpl<'a, 'g, T> {
             prev_node.unlock();
 
             // recycle the old node
-            unsafe {
-                self.guard.defer_unchecked(move || {
-                    let _ = Box::from_raw(curr_node as *const Node<T> as *mut Node<T>);
-                });
-            }
+            EpochPtr::destroy(curr_node, self.guard);
 
             return Some(Entry {
                 list: self.list,
