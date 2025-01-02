@@ -23,8 +23,7 @@ impl<T> EpochPtr<T> {
     }
 
     fn create<'a>(data: Box<T>) -> &'a T {
-        let ptr = Box::into_raw(data);
-        unsafe { &*ptr }
+        Box::leak(data)
     }
 
     fn destroy(data: &T, guard: &Guard) {
