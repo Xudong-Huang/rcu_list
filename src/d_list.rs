@@ -888,6 +888,8 @@ mod tests {
         assert_eq!(*iter.next().unwrap(), 1);
         assert_eq!(*iter.next().unwrap(), 100);
         assert_eq!(*iter.next().unwrap(), 3);
-        assert!(iter.next().is_none());
+        assert_eq!(*iter.next_back().unwrap(), 100);
+        assert_eq!(*iter.next_back().unwrap(), 1);
+        assert!(iter.next_back().is_none());
     }
 }
