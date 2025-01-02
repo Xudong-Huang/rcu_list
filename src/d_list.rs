@@ -32,10 +32,6 @@ impl<T> EpochPtr<T> {
         self.ptr.store(shared_ptr, Ordering::Release);
     }
 
-    fn clear(&self) {
-        self.ptr.store(Shared::null(), Ordering::Release);
-    }
-
     fn ptr_eq(&self, data: &T, guard: &Guard) -> bool {
         self.ptr.load(Ordering::Relaxed, guard).as_raw() == data
     }
@@ -103,8 +99,8 @@ impl<T> Node<T> {
     }
 
     #[inline]
-    fn prev_node<'g>(&self, guard: &'g Guard) -> Option<&'g Node<T>> {
-        self.prev.read(guard)
+    fn prev_node<'g>(&self, guard: &'g Guard) -> &'g Node<T> {
+        self.prev.read(guard).unwrap()
     }
 
     #[inline]
@@ -118,11 +114,6 @@ impl<T> Node<T> {
     }
 
     #[inline]
-    fn clear_prev_node(&self) {
-        self.prev.clear();
-    }
-
-    #[inline]
     fn next_node<'g>(&self, guard: &'g Guard) -> &'g Node<T> {
         // Safety: the next node is always valid except for the tail node
         self.next.read(guard).unwrap()
@@ -131,21 +122,11 @@ impl<T> Node<T> {
     fn lock_prev_node<'g>(&self, guard: &'g Guard) -> Result<&'g Node<T>, LockErr> {
         let backoff = crossbeam_utils::Backoff::new();
         loop {
-            let prev_node = match self.prev_node(guard) {
-                // something wrong, like the prev node is dropped,
-                // or the current node is removed
-                None => {
-                    if self.is_removed() {
-                        return Err(LockErr::Removed);
-                    }
-                    core::hint::spin_loop();
-                    continue;
-                }
+            if self.is_removed() {
+                return Err(LockErr::Removed);
+            }
 
-                // the prev can change due to prev insert/remove
-                // we will do more check later
-                Some(prev) => prev,
-            };
+            let prev_node = self.prev_node(guard);
 
             // if the prev node is removed, try again
             if prev_node.lock(guard).is_err() {
@@ -358,14 +339,7 @@ impl<T> LinkedList<T> {
     #[inline]
     pub fn back<'l: 'g, 'g>(&'l self, guard: &'g Guard) -> Option<Entry<'g, T>> {
         // tail.prev is always non empty
-        let node = loop {
-            match self.tail.prev_node(guard) {
-                Some(node) => break node,
-                // the prev node is dropped
-                // try again for a valid prev node
-                None => continue,
-            }
-        };
+        let node = self.tail.prev_node(guard);
         // only the head has None data
         node.data.is_some().then_some(Entry {
             list: self,
@@ -511,7 +485,6 @@ impl<'a: 'g, 'g, T> EntryImpl<'a, 'g, T> {
                 prev_node.next.write(next_node);
             }
             curr_node.unlock_remove();
-            curr_node.clear_prev_node();
         }
         prev_node.unlock();
     }
@@ -541,7 +514,6 @@ impl<'a: 'g, 'g, T> EntryImpl<'a, 'g, T> {
             }
             self.node.unlock_remove();
             new_node.unlock();
-            self.node.clear_prev_node();
         }
         prev_node.unlock();
 
@@ -605,7 +577,6 @@ impl<'a: 'g, 'g, T> EntryImpl<'a, 'g, T> {
                 self.node.next.write(next_node);
             }
             curr_node.unlock_remove();
-            curr_node.clear_prev_node();
         }
         self.node.unlock();
 
@@ -657,16 +628,11 @@ impl<'a: 'g, 'g, T> EntryImpl<'a, 'g, T> {
     /// Remove the element ahead of the entry, returns `None` if the list is empty.
     fn remove_ahead(&self) -> Option<Entry<'g, T>> {
         loop {
-            let curr_node = match self.node.prev_node(self.guard) {
-                Some(node) => node,
-                None => {
-                    if self.node.is_removed() {
-                        return None;
-                    }
-                    core::hint::spin_loop();
-                    continue;
-                }
-            };
+            if self.node.is_removed() {
+                return None;
+            }
+
+            let curr_node = self.node.prev_node(self.guard);
 
             // the list is empty
             if core::ptr::eq(curr_node, self.list.head.as_ref()) {
@@ -694,7 +660,6 @@ impl<'a: 'g, 'g, T> EntryImpl<'a, 'g, T> {
                     prev_node.next.write(next_node);
                 }
                 curr_node.unlock_remove();
-                curr_node.clear_prev_node();
             }
             prev_node.unlock();
 
