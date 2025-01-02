@@ -456,6 +456,19 @@ impl<'g, T> Iterator for Iter<'_, 'g, T> {
     }
 }
 
+impl<'g, T> DoubleEndedIterator for Iter<'_, 'g, T> {
+    #[inline]
+    fn next_back(&mut self) -> Option<Self::Item> {
+        let prev_node = self.curr.prev.read(self.guard)?;
+        self.curr = prev_node;
+        prev_node.data.is_some().then_some(Entry {
+            list: self.list,
+            node: prev_node,
+            guard: self.guard,
+        })
+    }
+}
+
 struct EntryImpl<'a, 'g, T> {
     list: &'a LinkedList<T>,
     node: &'g Node<T>,
