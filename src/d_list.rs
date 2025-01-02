@@ -27,15 +27,13 @@ impl<T> EpochPtr<T> {
         unsafe { shared.as_ref() }
     }
 
-    fn write<'g>(&self, data: &'g T, guard: &'g Guard) -> Option<&'g T> {
+    fn write(&self, data: &T) {
         let shared_ptr = Shared::from(data as *const T);
-        let old = self.ptr.swap(shared_ptr, Ordering::AcqRel, guard);
-        unsafe { old.as_ref() }
+        self.ptr.store(shared_ptr, Ordering::Release);
     }
 
-    fn take<'g>(&self, guard: &'g Guard) -> Option<&'g T> {
-        let old = self.ptr.swap(Shared::null(), Ordering::AcqRel, guard);
-        unsafe { old.as_ref() }
+    fn clear(&self) {
+        self.ptr.store(Shared::null(), Ordering::Release);
     }
 
     fn ptr_eq(&self, data: &T, guard: &Guard) -> bool {
@@ -115,13 +113,13 @@ impl<T> Node<T> {
     }
 
     #[inline]
-    fn set_prev_node<'g>(&self, prev: &'g Node<T>, guard: &'g Guard) -> Option<&'g Node<T>> {
-        self.prev.write(prev, guard)
+    fn set_prev_node(&self, prev: &Node<T>) {
+        self.prev.write(prev)
     }
 
     #[inline]
-    fn clear_prev_node(&self, guard: &Guard) {
-        self.prev.take(guard);
+    fn clear_prev_node(&self) {
+        self.prev.clear();
     }
 
     #[inline]
@@ -330,10 +328,8 @@ impl<T> LinkedList<T> {
         let head = Box::new(Node::default());
         let tail = Box::new(Node::default());
 
-        let guard = unsafe { crossbeam_epoch::unprotected() };
-
-        tail.prev.write(&head, guard);
-        head.next.write(&tail, guard);
+        tail.prev.write(&head);
+        head.next.write(&tail);
 
         Self { head, tail }
     }
@@ -511,11 +507,11 @@ impl<'a: 'g, 'g, T> EntryImpl<'a, 'g, T> {
             // unwrap safety: the prev node is locked
             let next_node = curr_node.lock(self.guard).unwrap();
             {
-                next_node.set_prev_node(prev_node, self.guard);
-                prev_node.next.write(next_node, self.guard);
+                next_node.set_prev_node(prev_node);
+                prev_node.next.write(next_node);
             }
             curr_node.unlock_remove();
-            curr_node.clear_prev_node(self.guard);
+            curr_node.clear_prev_node();
         }
         prev_node.unlock();
     }
@@ -523,7 +519,7 @@ impl<'a: 'g, 'g, T> EntryImpl<'a, 'g, T> {
     /// Replace the entry with new value,
     fn replace(&self, elt: T) -> Result<Entry<'g, T>, T> {
         let new_node = Box::new(Node::new(elt));
-        new_node.next.write(self.node, self.guard);
+        new_node.next.write(self.node);
 
         let prev_node = match self.node.lock_prev_node(self.guard) {
             Ok(node) => node,
@@ -534,18 +530,18 @@ impl<'a: 'g, 'g, T> EntryImpl<'a, 'g, T> {
         };
         let new_node = unsafe { &*Box::into_raw(new_node) };
         {
-            new_node.set_prev_node(prev_node, self.guard);
+            new_node.set_prev_node(prev_node);
             new_node.try_lock().unwrap();
             self.node.lock(self.guard).unwrap();
             {
                 let next_node = self.node.next_node(self.guard);
-                next_node.set_prev_node(new_node, self.guard);
-                new_node.next.write(next_node, self.guard);
-                prev_node.next.write(new_node, self.guard);
+                next_node.set_prev_node(new_node);
+                new_node.next.write(next_node);
+                prev_node.next.write(new_node);
             }
             self.node.unlock_remove();
             new_node.unlock();
-            self.node.clear_prev_node(self.guard);
+            self.node.clear_prev_node();
         }
         prev_node.unlock();
 
@@ -560,7 +556,7 @@ impl<'a: 'g, 'g, T> EntryImpl<'a, 'g, T> {
     /// if the entry was removed, the element will be returned in Err()
     fn insert_after(&self, elt: T) -> Result<Entry<'g, T>, T> {
         let new_node = Box::new(Node::new(elt));
-        new_node.set_prev_node(self.node, self.guard);
+        new_node.set_prev_node(self.node);
 
         let next_node = match self.node.lock(self.guard) {
             Ok(node) => node,
@@ -574,9 +570,9 @@ impl<'a: 'g, 'g, T> EntryImpl<'a, 'g, T> {
         {
             // new_node.try_lock().unwrap();
             {
-                new_node.next.write(next_node, self.guard);
-                next_node.set_prev_node(new_node, self.guard);
-                self.node.next.write(new_node, self.guard);
+                new_node.next.write(next_node);
+                next_node.set_prev_node(new_node);
+                self.node.next.write(new_node);
             }
             // new_node.unlock();
         }
@@ -605,11 +601,11 @@ impl<'a: 'g, 'g, T> EntryImpl<'a, 'g, T> {
             // unwrap safety: next must be valid since it's still in the list
             let next_node = curr_node.lock(self.guard).unwrap();
             {
-                next_node.set_prev_node(self.node, self.guard);
-                self.node.next.write(next_node, self.guard);
+                next_node.set_prev_node(self.node);
+                self.node.next.write(next_node);
             }
             curr_node.unlock_remove();
-            curr_node.clear_prev_node(self.guard);
+            curr_node.clear_prev_node();
         }
         self.node.unlock();
 
@@ -630,7 +626,7 @@ impl<'a: 'g, 'g, T> EntryImpl<'a, 'g, T> {
     /// Insert an element ahead of the entry, and returns the new Entry to it.
     pub fn insert_ahead(&self, elt: T) -> Result<Entry<'g, T>, T> {
         let new_node = Box::new(Node::new(elt));
-        new_node.next.write(self.node, self.guard);
+        new_node.next.write(self.node);
 
         let prev_node = match self.node.lock_prev_node(self.guard) {
             Ok(node) => node,
@@ -639,13 +635,13 @@ impl<'a: 'g, 'g, T> EntryImpl<'a, 'g, T> {
                 return Err(node.data.unwrap());
             }
         };
-        new_node.set_prev_node(prev_node, self.guard);
+        new_node.set_prev_node(prev_node);
         let new_node = unsafe { &*Box::into_raw(new_node) };
         {
             // new_node.try_lock().unwrap();
             {
-                self.node.set_prev_node(new_node, self.guard);
-                prev_node.next.write(new_node, self.guard);
+                self.node.set_prev_node(new_node);
+                prev_node.next.write(new_node);
             }
             // new_node.unlock();
         }
@@ -694,11 +690,11 @@ impl<'a: 'g, 'g, T> EntryImpl<'a, 'g, T> {
                         continue;
                     }
 
-                    self.node.set_prev_node(prev_node, self.guard);
-                    prev_node.next.write(next_node, self.guard);
+                    self.node.set_prev_node(prev_node);
+                    prev_node.next.write(next_node);
                 }
                 curr_node.unlock_remove();
-                curr_node.clear_prev_node(self.guard);
+                curr_node.clear_prev_node();
             }
             prev_node.unlock();
 
