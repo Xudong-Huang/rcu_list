@@ -385,7 +385,7 @@ impl<T> LinkedList<T> {
 
     /// Returns an iterator over the elements of the list.
     #[inline]
-    pub fn iter<'l: 'g, 'g>(&'l self, guard: &'g Guard) -> Iter<'l, 'g, T> {
+    pub fn iter<'l: 'g, 'g>(&'l self, guard: &'g Guard) -> Iter<'g, T> {
         Iter {
             list: self,
             curr: &self.head,
@@ -436,7 +436,7 @@ impl<'l, T> PinedLinkedList<'l, T> {
         self.list.pop_back(&self.guard)
     }
 
-    pub fn iter(&self) -> Iter<'l, '_, T> {
+    pub fn iter(&self) -> Iter<'_, T> {
         self.list.iter(&self.guard)
     }
 }
@@ -445,13 +445,13 @@ impl<'l, T> PinedLinkedList<'l, T> {
 ///
 /// This `struct` is created by [`LinkedList::iter()`]. See its
 /// documentation for more.
-pub struct Iter<'l: 'g, 'g, T: 'l> {
-    list: &'l LinkedList<T>,
+pub struct Iter<'g, T> {
+    list: &'g LinkedList<T>,
     curr: &'g Node<T>,
     guard: &'g Guard,
 }
 
-impl<'g, T> Iterator for Iter<'_, 'g, T> {
+impl<'g, T> Iterator for Iter<'g, T> {
     type Item = Entry<'g, T>;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -465,7 +465,7 @@ impl<'g, T> Iterator for Iter<'_, 'g, T> {
     }
 }
 
-impl<'g, T> DoubleEndedIterator for Iter<'_, 'g, T> {
+impl<'g, T> DoubleEndedIterator for Iter<'g, T> {
     #[inline]
     fn next_back(&mut self) -> Option<Self::Item> {
         let prev_node = self.curr.prev.read(self.guard)?;
