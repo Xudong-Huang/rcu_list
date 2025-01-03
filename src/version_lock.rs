@@ -113,11 +113,12 @@ impl VersionLock {
         self.version.load(Ordering::Relaxed) & 1 == 1
     }
 
-    // #[inline]
-    // /// Check if the lock is unlocked and not removed
-    // pub fn is_ready(&self) -> bool {
-    //     self.version.load(Ordering::Relaxed) & 3 == 0
-    // }
+    #[allow(dead_code)]
+    #[inline]
+    /// Check if the lock is unlocked and not removed
+    pub fn is_ready(&self) -> bool {
+        self.version.load(Ordering::Relaxed) & 3 == 0
+    }
 }
 
 #[cfg(test)]

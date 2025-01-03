@@ -75,8 +75,8 @@ fn con_push_front() {
 
 #[test]
 fn con_pop_front() {
-    const THREADS: usize = 16;
-    const ITEMS: usize = 400;
+    const THREADS: usize = 20;
+    const ITEMS: usize = 1000;
 
     let queue = Arc::new(LinkedList::new());
     let barrier = Arc::new(Barrier::new(THREADS));
@@ -147,8 +147,8 @@ fn con_pop_back() {
 
 #[test]
 fn push_back_pop_back() {
-    const THREADS: usize = 16;
-    const ITEMS: usize = 400;
+    const THREADS: usize = 20;
+    const ITEMS: usize = 1000;
 
     let queue = Arc::new(LinkedList::new());
     let barrier = Arc::new(Barrier::new(THREADS));
@@ -178,8 +178,8 @@ fn push_back_pop_back() {
 
 #[test]
 fn push_front_pop_front() {
-    const THREADS: usize = 16;
-    const ITEMS: usize = 400;
+    const THREADS: usize = 20;
+    const ITEMS: usize = 1000;
 
     let queue = Arc::new(LinkedList::new());
     let barrier = Arc::new(Barrier::new(THREADS));
@@ -209,8 +209,8 @@ fn push_front_pop_front() {
 
 #[test]
 fn push_back_pop_front() {
-    const THREADS: usize = 16;
-    const ITEMS: usize = 400;
+    const THREADS: usize = 20;
+    const ITEMS: usize = 1000;
 
     let queue = Arc::new(LinkedList::new());
     let barrier = Arc::new(Barrier::new(THREADS));
@@ -240,8 +240,8 @@ fn push_back_pop_front() {
 
 #[test]
 fn push_front_pop_back() {
-    const THREADS: usize = 16;
-    const ITEMS: usize = 400;
+    const THREADS: usize = 20;
+    const ITEMS: usize = 1000;
 
     let queue = Arc::new(LinkedList::new());
     let barrier = Arc::new(Barrier::new(THREADS));

@@ -125,13 +125,11 @@ mod rcu_double_list {
         }
 
         fn push(&self, value: T) {
-            let guard = &crossbeam_epoch::pin();
-            self.list.push_back(value, guard);
+            self.list.pin().push_back(value);
         }
 
         fn pop(&self) -> Option<T> {
-            let guard = &crossbeam_epoch::pin();
-            self.list.pop_front(guard).map(|entry| *entry)
+            self.list.pin().pop_front().map(|entry| *entry)
         }
 
         fn is_empty(&self) -> bool {
@@ -159,13 +157,11 @@ mod rcu_double_list_rev {
         }
 
         fn push(&self, value: T) {
-            let guard = &crossbeam_epoch::pin();
-            self.list.push_front(value, guard);
+            self.list.pin().push_front(value);
         }
 
         fn pop(&self) -> Option<T> {
-            let guard = &crossbeam_epoch::pin();
-            self.list.pop_back(guard).map(|entry| *entry)
+            self.list.pin().pop_back().map(|entry| *entry)
         }
 
         fn is_empty(&self) -> bool {
