@@ -1,4 +1,4 @@
-use crossbeam_epoch::{Atomic, Guard, Shared};
+use crossbeam_epoch::{Atomic, Guard, Owned, Shared};
 
 use alloc::boxed::Box;
 use core::ops::Deref;
@@ -22,8 +22,9 @@ impl<T> EpochPtr<T> {
         }
     }
 
-    fn create<'a>(data: Box<T>) -> &'a T {
-        Box::leak(data)
+    fn create<'g>(data: T, guard: &'g Guard) -> &'g T {
+        let shared = Owned::new(data).into_shared(guard);
+        unsafe { shared.as_ref() }.unwrap()
     }
 
     fn destroy(data: &T, guard: &Guard) {
@@ -512,17 +513,14 @@ impl<'a: 'g, 'g, T> EntryImpl<'a, 'g, T> {
 
     /// Replace the entry with new value,
     fn replace(&self, elt: T) -> Result<Entry<'g, T>, T> {
-        let new_node = Box::new(Node::new(elt));
+        let new_node = Node::new(elt);
         new_node.next.write(self.node);
 
         let prev_node = match self.node.lock_prev_node(self.guard) {
             Ok(node) => node,
-            Err(_) => {
-                let node = *new_node;
-                return Err(node.data.unwrap());
-            }
+            Err(_) => return Err(new_node.data.unwrap()),
         };
-        let new_node = EpochPtr::create(new_node);
+        let new_node = EpochPtr::create(new_node, self.guard);
         {
             new_node.set_prev_node(prev_node);
             new_node.try_lock().unwrap();
@@ -548,18 +546,15 @@ impl<'a: 'g, 'g, T> EntryImpl<'a, 'g, T> {
     /// insert an element after the entry.
     /// if the entry was removed, the element will be returned in Err()
     fn insert_after(&self, elt: T) -> Result<Entry<'g, T>, T> {
-        let new_node = Box::new(Node::new(elt));
+        let new_node = Node::new(elt);
         new_node.set_prev_node(self.node);
 
         let next_node = match self.node.lock(self.guard) {
             Ok(node) => node,
-            Err(_) => {
-                // current entry removed, can't insert
-                let n = *new_node;
-                return Err(n.data.unwrap());
-            }
+            // current entry removed, can't insert
+            Err(_) => return Err(new_node.data.unwrap()),
         };
-        let new_node = EpochPtr::create(new_node);
+        let new_node = EpochPtr::create(new_node, self.guard);
         {
             // new_node.try_lock().unwrap();
             {
@@ -613,18 +608,15 @@ impl<'a: 'g, 'g, T> EntryImpl<'a, 'g, T> {
 
     /// Insert an element ahead of the entry, and returns the new Entry to it.
     pub fn insert_ahead(&self, elt: T) -> Result<Entry<'g, T>, T> {
-        let new_node = Box::new(Node::new(elt));
+        let new_node = Node::new(elt);
         new_node.next.write(self.node);
 
         let prev_node = match self.node.lock_prev_node(self.guard) {
             Ok(node) => node,
-            Err(_) => {
-                let node = *new_node;
-                return Err(node.data.unwrap());
-            }
+            Err(_) => return Err(new_node.data.unwrap()),
         };
         new_node.set_prev_node(prev_node);
-        let new_node = EpochPtr::create(new_node);
+        let new_node = EpochPtr::create(new_node, self.guard);
         {
             // new_node.try_lock().unwrap();
             {
