@@ -22,7 +22,7 @@ impl<T> EpochPtr<T> {
         }
     }
 
-    fn create<'g>(data: T, guard: &'g Guard) -> &'g T {
+    fn create(data: T, guard: &Guard) -> &T {
         let shared = Owned::new(data).into_shared(guard);
         unsafe { shared.as_ref() }.unwrap()
     }
@@ -407,7 +407,7 @@ pub struct PinedLinkedList<'l, T> {
     guard: Guard,
 }
 
-impl<'l, T> PinedLinkedList<'l, T> {
+impl<T> PinedLinkedList<'_, T> {
     pub fn is_empty(&self) -> bool {
         self.list.is_empty()
     }
@@ -436,7 +436,7 @@ impl<'l, T> PinedLinkedList<'l, T> {
         self.list.pop_back(&self.guard)
     }
 
-    pub fn iter(&self) -> Iter<'_, T> {
+    pub fn iter(&self) -> Iter<T> {
         self.list.iter(&self.guard)
     }
 }
@@ -465,7 +465,7 @@ impl<'g, T> Iterator for Iter<'g, T> {
     }
 }
 
-impl<'g, T> DoubleEndedIterator for Iter<'g, T> {
+impl<T> DoubleEndedIterator for Iter<'_, T> {
     #[inline]
     fn next_back(&mut self) -> Option<Self::Item> {
         let prev_node = self.curr.prev.read(self.guard)?;
