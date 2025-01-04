@@ -48,7 +48,7 @@ impl<T> EpochPtr<T> {
 }
 
 #[derive(Debug)]
-#[repr(align(64))]
+// #[repr(align(64))]
 struct Node<T> {
     version: VersionLock,
     next: EpochPtr<Node<T>>,
