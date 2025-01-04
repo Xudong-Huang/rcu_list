@@ -509,14 +509,17 @@ impl<'a: 'g, 'g, T> EntryImpl<'a, 'g, T> {
             curr_node.unlock_remove();
         }
         prev_node.unlock();
+
+        // recycle the old node
+        EpochPtr::destroy(curr_node, self.guard);
     }
 
     /// Replace the entry with new value,
     fn replace(&self, elt: T) -> Result<Entry<'g, T>, T> {
+        let curr_node = self.node;
         let new_node = Node::new(elt);
-        new_node.next.write(self.node);
 
-        let prev_node = match self.node.lock_prev_node(self.guard) {
+        let prev_node = match curr_node.lock_prev_node(self.guard) {
             Ok(node) => node,
             Err(_) => return Err(new_node.data.unwrap()),
         };
@@ -524,17 +527,20 @@ impl<'a: 'g, 'g, T> EntryImpl<'a, 'g, T> {
         {
             new_node.set_prev_node(prev_node);
             new_node.try_lock().unwrap();
-            self.node.lock(self.guard).unwrap();
+            curr_node.lock(self.guard).unwrap();
             {
-                let next_node = self.node.next_node(self.guard);
+                let next_node = curr_node.next_node(self.guard);
                 next_node.set_prev_node(new_node);
                 new_node.next.write(next_node);
                 prev_node.next.write(new_node);
             }
-            self.node.unlock_remove();
+            curr_node.unlock_remove();
             new_node.unlock();
         }
         prev_node.unlock();
+
+        // recycle the old node
+        EpochPtr::destroy(self.node, self.guard);
 
         Ok(Entry {
             list: self.list,

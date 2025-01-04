@@ -101,6 +101,12 @@ fn con_mpmc(b: &mut Bencher) {
             handle.join().unwrap();
         }
         assert!(queue.is_empty());
+
+        // force to release memory!!!
+        drop(queue);
+        for _ in 0..128 {
+            crossbeam_epoch::pin().flush();
+        }
     });
 }
 
