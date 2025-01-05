@@ -1,4 +1,5 @@
 use crossbeam_epoch::{Atomic, Guard, Owned, Shared};
+use crossbeam_utils::CachePadded;
 
 use alloc::boxed::Box;
 use core::ops::Deref;
@@ -294,8 +295,8 @@ impl<T: Eq> Eq for Entry<'_, T> {}
 /// The readers like `iter`, `front` and `back` don't need to get locks.
 #[derive(Debug)]
 pub struct LinkedList<T> {
-    head: Box<Node<T>>,
-    tail: Box<Node<T>>,
+    head: CachePadded<Box<Node<T>>>,
+    tail: CachePadded<Box<Node<T>>>,
 }
 
 impl<T> Default for LinkedList<T> {
@@ -315,8 +316,8 @@ impl<T> LinkedList<T> {
     /// Creates a new empty `LinkedList`.
     pub fn new() -> Self {
         // this is only used for list head, should never deref it's data
-        let head = Box::new(Node::default());
-        let tail = Box::new(Node::default());
+        let head = CachePadded::new(Box::new(Node::default()));
+        let tail = CachePadded::new(Box::new(Node::default()));
 
         tail.prev.write(&head);
         head.next.write(&tail);
