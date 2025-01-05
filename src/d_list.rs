@@ -24,7 +24,7 @@ impl<T> EpochPtr<T> {
 
     fn create(data: T, guard: &Guard) -> &T {
         let shared = Owned::new(data).into_shared(guard);
-        unsafe { shared.as_ref() }.unwrap()
+        unsafe { shared.deref() }
     }
 
     fn destroy(data: &T, guard: &Guard) {
