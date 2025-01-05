@@ -7,7 +7,6 @@ use core::{cmp, fmt};
 use crate::version_lock::{LockErr, VersionLock};
 
 #[derive(Debug)]
-#[repr(align(64))]
 struct Node<T> {
     version: VersionLock,
     next: RcuCell<Node<T>>,
