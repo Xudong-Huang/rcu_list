@@ -59,6 +59,41 @@ fn simple_iter(b: &mut Bencher) {
 }
 
 #[bench]
+fn con_arc(b: &mut Bencher) {
+    use std::sync::{Arc, Barrier};
+    const THREADS: usize = 20;
+    const ITEMS: usize = 10_000;
+
+    b.iter(|| {
+        let arc = Arc::new(0);
+        let barrier = Arc::new(Barrier::new(THREADS));
+
+        let handles = (0..THREADS)
+            .map(|_| {
+                let arc = arc.clone();
+                let barrier = barrier.clone();
+
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    let mut entry_vec = Vec::with_capacity(ITEMS);
+                    for _i in 0..ITEMS {
+                        entry_vec.push(arc.clone());
+                    }
+
+                    for arc in entry_vec {
+                        drop(arc);
+                    }
+                })
+            })
+            .collect::<Vec<_>>();
+
+        for handle in handles {
+            handle.join().unwrap();
+        }
+    });
+}
+
+#[bench]
 fn con_mpmc(b: &mut Bencher) {
     use std::sync::{Arc, Barrier};
     const THREADS: usize = 20;
@@ -116,9 +151,10 @@ fn con_mpmc_crossbeam(b: &mut Bencher) {
                     barrier.wait();
                     let mut vec = Vec::with_capacity(ITEMS);
                     for i in 0..ITEMS {
-                        let item = Arc::new(i);
-                        queue.push(item.clone());
-                        vec.push(item);
+                        // let item = Arc::new(i);
+                        // queue.push(item.clone());
+                        queue.push(i);
+                        vec.push(i);
                     }
 
                     for _ in vec {
