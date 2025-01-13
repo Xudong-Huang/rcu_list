@@ -1,5 +1,5 @@
-use epoch_gc as epoch;
 use rcu_list::d_list::LinkedList;
+use rcu_list::epoch;
 
 use std::sync::{Arc, Barrier};
 use std::thread;

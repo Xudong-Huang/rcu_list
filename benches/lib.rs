@@ -1,8 +1,8 @@
 #![feature(test)]
 extern crate test;
 
-use epoch_gc as epoch;
 use rcu_list::d_list::LinkedList;
+use rcu_list::epoch;
 use test::Bencher;
 
 #[bench]

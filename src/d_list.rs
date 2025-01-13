@@ -1,11 +1,9 @@
-use epoch::{Atomic, Guard, Owned, Shared};
-use epoch_gc as epoch;
-
 use alloc::boxed::Box;
 use core::ops::Deref;
 use core::sync::atomic::Ordering;
 use core::{cmp, fmt};
 
+use crate::epoch::{self, Atomic, Guard, Owned, Shared};
 use crate::version_lock::{LockErr, VersionLock};
 
 /// A node ptr that actually stores `Arc<T>` in it.
@@ -693,7 +691,8 @@ impl<'a: 'g, 'g, T> EntryImpl<'a, 'g, T> {
 
 #[cfg(test)]
 mod tests {
-    use epoch_gc as epoch;
+    use crate::epoch;
+
     #[test]
     fn test_list() {
         let list = super::LinkedList::new();
