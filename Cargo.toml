@@ -17,6 +17,7 @@ exclude = [".gitignore", "benches/**"]
 rcu_cell = "1.2.0"
 crossbeam-utils = "0.8.20"
 crossbeam-epoch = "0.9.18"
+epoch_gc = { path = "../epoch_gc" }
 
 [dev-dependencies]
 scc = "2.2.5"

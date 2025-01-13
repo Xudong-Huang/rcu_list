@@ -1,4 +1,5 @@
-use crossbeam_epoch::{Atomic, Guard, Owned, Shared};
+use epoch::{Atomic, Guard, Owned, Shared};
+use epoch_gc as epoch;
 
 use alloc::boxed::Box;
 use core::ops::Deref;
@@ -306,7 +307,7 @@ impl<T> Default for LinkedList<T> {
 
 impl<T> Drop for LinkedList<T> {
     fn drop(&mut self) {
-        let guard = unsafe { crossbeam_epoch::unprotected() };
+        let guard = unsafe { epoch::unprotected() };
         while self.pop_front(guard).is_some() {}
     }
 }
@@ -327,7 +328,7 @@ impl<T> LinkedList<T> {
     /// Returns true if the list is empty.
     #[inline]
     pub fn is_empty(&self) -> bool {
-        let guard = unsafe { crossbeam_epoch::unprotected() };
+        let guard = unsafe { epoch::unprotected() };
         self.head.next.ptr_eq(&self.tail, guard)
     }
 
@@ -397,7 +398,7 @@ impl<T> LinkedList<T> {
     pub fn pin(&self) -> PinedLinkedList<T> {
         PinedLinkedList {
             list: self,
-            guard: crossbeam_epoch::pin(),
+            guard: epoch::pin(),
         }
     }
 }
@@ -692,12 +693,13 @@ impl<'a: 'g, 'g, T> EntryImpl<'a, 'g, T> {
 
 #[cfg(test)]
 mod tests {
+    use epoch_gc as epoch;
     #[test]
     fn test_list() {
         let list = super::LinkedList::new();
         assert!(list.is_empty());
 
-        let guard = &crossbeam_epoch::pin();
+        let guard = &epoch::pin();
 
         list.push_back(1, guard);
         assert!(!list.is_empty());
@@ -723,7 +725,7 @@ mod tests {
         let list = super::LinkedList::new();
         assert!(list.is_empty());
 
-        let guard = &crossbeam_epoch::pin();
+        let guard = &epoch::pin();
 
         list.push_front(1, guard);
         assert!(!list.is_empty());
@@ -748,7 +750,7 @@ mod tests {
     fn test_remove_entry() {
         let list = super::LinkedList::new();
 
-        let guard = &crossbeam_epoch::pin();
+        let guard = &epoch::pin();
 
         let entry = list.push_back(1, guard);
         assert!(!entry.is_removed());
@@ -763,7 +765,7 @@ mod tests {
     fn test_iter() {
         let list = super::LinkedList::new();
 
-        let guard = &crossbeam_epoch::pin();
+        let guard = &epoch::pin();
 
         list.push_back(1, guard);
         list.push_back(2, guard);
@@ -780,7 +782,7 @@ mod tests {
     fn entry_remove() {
         let list = super::LinkedList::new();
 
-        let guard = &crossbeam_epoch::pin();
+        let guard = &epoch::pin();
 
         list.push_back(1, guard);
         let entry = list.push_back(2, guard);
@@ -798,7 +800,7 @@ mod tests {
     fn entry_insert_after() {
         let list = super::LinkedList::new();
 
-        let guard = &crossbeam_epoch::pin();
+        let guard = &epoch::pin();
         list.push_back(1, guard);
         let entry = list.push_back(2, guard);
         list.push_back(3, guard);
@@ -817,7 +819,7 @@ mod tests {
     fn entry_insert_after_remove() {
         let list = super::LinkedList::new();
 
-        let guard = &crossbeam_epoch::pin();
+        let guard = &epoch::pin();
 
         list.push_back(1, guard);
         let entry = list.push_back(2, guard);
@@ -851,7 +853,7 @@ mod tests {
         }
         let list = super::LinkedList::new();
 
-        let guard = crossbeam_epoch::pin();
+        let guard = epoch::pin();
 
         for i in 0..100 {
             list.push_back(Foo::new(i), &guard);
@@ -864,7 +866,7 @@ mod tests {
         // force drop all the garbage
         drop(guard);
         for _ in 0..128 {
-            crossbeam_epoch::pin().flush();
+            epoch::pin().flush();
         }
         assert_eq!(REF.load(Ordering::Relaxed), (0..100).sum());
     }

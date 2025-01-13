@@ -23,6 +23,10 @@ fn treiber_stack(c: &mut Criterion) {
         b.iter(run::<rcu_stack::TreiberStack<usize>>)
     });
 
+    c.bench_function("trieber_stack-epoch-gc", |b| {
+        b.iter(run::<epoch_gc_stack::TreiberStack<usize>>)
+    });
+
     c.bench_function("trieber_stack-crossbeam", |b| {
         b.iter(run::<crossbeam_stack::TreiberStack<usize>>)
     });
@@ -169,7 +173,8 @@ mod seize_stack {
 
 mod crossbeam_stack {
     use super::Stack;
-    use crossbeam_epoch::{Atomic, Owned, Shared};
+    use crossbeam_epoch as epoch;
+    use epoch::{Atomic, Owned, Shared};
     use std::mem::ManuallyDrop;
     use std::ptr;
     use std::sync::atomic::Ordering;
@@ -196,7 +201,7 @@ mod crossbeam_stack {
         }
 
         fn push(&self, value: T) {
-            let guard = crossbeam_epoch::pin();
+            let guard = epoch::pin();
 
             let mut node = Owned::new(Node {
                 data: ManuallyDrop::new(value),
@@ -221,7 +226,7 @@ mod crossbeam_stack {
         }
 
         fn pop(&self) -> Option<T> {
-            let guard = crossbeam_epoch::pin();
+            let guard = epoch::pin();
 
             loop {
                 let head = self.head.load(Ordering::Acquire, &guard);
@@ -253,7 +258,106 @@ mod crossbeam_stack {
         }
 
         fn is_empty(&self) -> bool {
-            let guard = crossbeam_epoch::pin();
+            let guard = epoch::pin();
+            self.head.load(Ordering::Relaxed, &guard).is_null()
+        }
+    }
+
+    impl<T> Drop for TreiberStack<T> {
+        fn drop(&mut self) {
+            while self.pop().is_some() {}
+        }
+    }
+}
+
+mod epoch_gc_stack {
+    use super::Stack;
+    use epoch::{Atomic, Owned, Shared};
+    use epoch_gc as epoch;
+    use std::mem::ManuallyDrop;
+    use std::ptr;
+    use std::sync::atomic::Ordering;
+
+    #[derive(Debug)]
+    pub struct TreiberStack<T> {
+        head: Atomic<Node<T>>,
+    }
+
+    unsafe impl<T: Send> Send for TreiberStack<T> {}
+    unsafe impl<T: Sync> Sync for TreiberStack<T> {}
+
+    #[derive(Debug)]
+    struct Node<T> {
+        data: ManuallyDrop<T>,
+        next: *const Node<T>,
+    }
+
+    impl<T> Stack<T> for TreiberStack<T> {
+        fn new() -> TreiberStack<T> {
+            TreiberStack {
+                head: Atomic::null(),
+            }
+        }
+
+        fn push(&self, value: T) {
+            let guard = epoch::pin();
+
+            let mut node = Owned::new(Node {
+                data: ManuallyDrop::new(value),
+                next: ptr::null_mut(),
+            });
+
+            loop {
+                let head = self.head.load(Ordering::Relaxed, &guard);
+                node.next = head.as_raw();
+
+                match self.head.compare_exchange(
+                    head,
+                    node,
+                    Ordering::Release,
+                    Ordering::Relaxed,
+                    &guard,
+                ) {
+                    Ok(_) => break,
+                    Err(err) => node = err.new,
+                }
+            }
+        }
+
+        fn pop(&self) -> Option<T> {
+            let guard = epoch::pin();
+
+            loop {
+                let head = self.head.load(Ordering::Acquire, &guard);
+
+                if head.is_null() {
+                    return None;
+                }
+
+                let next = unsafe { head.deref().next };
+
+                if self
+                    .head
+                    .compare_exchange(
+                        head,
+                        Shared::from(next),
+                        Ordering::Relaxed,
+                        Ordering::Relaxed,
+                        &guard,
+                    )
+                    .is_ok()
+                {
+                    unsafe {
+                        let data = ptr::read(&head.deref().data);
+                        guard.defer_destroy(head);
+                        return Some(ManuallyDrop::into_inner(data));
+                    }
+                }
+            }
+        }
+
+        fn is_empty(&self) -> bool {
+            let guard = epoch::pin();
             self.head.load(Ordering::Relaxed, &guard).is_null()
         }
     }

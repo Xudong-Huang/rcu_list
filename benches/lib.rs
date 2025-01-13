@@ -1,13 +1,14 @@
 #![feature(test)]
 extern crate test;
 
+use epoch_gc as epoch;
 use rcu_list::d_list::LinkedList;
 use test::Bencher;
 
 #[bench]
 fn simple_push_front_pop_back(b: &mut Bencher) {
     let list = LinkedList::new();
-    let guard = &crossbeam_epoch::pin();
+    let guard = &epoch::pin();
     b.iter(|| {
         let entry = list.push_front(42, guard);
         assert_eq!(list.pop_back(guard), Some(entry));
@@ -17,7 +18,7 @@ fn simple_push_front_pop_back(b: &mut Bencher) {
 #[bench]
 fn simple_push_back_pop_front(b: &mut Bencher) {
     let list = LinkedList::new();
-    let guard = &crossbeam_epoch::pin();
+    let guard = &epoch::pin();
     b.iter(|| {
         let entry = list.push_back(42, guard);
         assert_eq!(list.pop_front(guard), Some(entry));
@@ -27,7 +28,7 @@ fn simple_push_back_pop_front(b: &mut Bencher) {
 #[bench]
 fn simple_front(b: &mut Bencher) {
     let list = LinkedList::new();
-    let guard = &crossbeam_epoch::pin();
+    let guard = &epoch::pin();
     list.push_front(42, guard);
 
     b.iter(|| {
@@ -38,7 +39,7 @@ fn simple_front(b: &mut Bencher) {
 #[bench]
 fn simple_back(b: &mut Bencher) {
     let list = LinkedList::new();
-    let guard = &crossbeam_epoch::pin();
+    let guard = &epoch::pin();
     list.push_back(42, guard);
     b.iter(|| {
         assert_eq!(*list.back(guard).unwrap(), 42);
@@ -48,7 +49,7 @@ fn simple_back(b: &mut Bencher) {
 #[bench]
 fn simple_iter(b: &mut Bencher) {
     let list = LinkedList::new();
-    let guard = &crossbeam_epoch::pin();
+    let guard = &epoch::pin();
     for i in 0..1000 {
         list.push_back(i, guard);
     }
@@ -81,7 +82,7 @@ fn con_mpmc(b: &mut Bencher) {
 
                 std::thread::spawn(move || {
                     barrier.wait();
-                    let guard = &crossbeam_epoch::pin();
+                    let guard = &epoch::pin();
                     let entry = queue.push_back(0, guard);
                     let mut entry_vec = Vec::with_capacity(ITEMS);
                     entry_vec.push(entry);
@@ -105,7 +106,7 @@ fn con_mpmc(b: &mut Bencher) {
         // force to release memory!!!
         drop(queue);
         for _ in 0..128 {
-            crossbeam_epoch::pin().flush();
+            epoch::pin().flush();
         }
     });
 }
