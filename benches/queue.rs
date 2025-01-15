@@ -11,6 +11,10 @@ fn treiber_stack(c: &mut Criterion) {
         b.iter(run::<rcu_single_list::ListQueue<usize>>)
     });
 
+    c.bench_function("queue-rcu-single-list-1", |b| {
+        b.iter(run::<rcu_single_list_1::ListQueue<usize>>)
+    });
+
     c.bench_function("queue-rcu-double-list-head", |b| {
         b.iter(run::<rcu_double_list::ListQueue<usize>>)
     });
@@ -98,6 +102,36 @@ mod rcu_single_list {
 
         fn pop(&self) -> Option<T> {
             self.list.pop_front().map(|entry| *entry)
+        }
+
+        fn is_empty(&self) -> bool {
+            self.list.is_empty()
+        }
+    }
+}
+
+mod rcu_single_list_1 {
+    use super::Queue;
+    use rcu_list::s_list_1::Queue as LinkedList;
+
+    #[derive(Debug)]
+    pub struct ListQueue<T> {
+        list: LinkedList<T>,
+    }
+
+    impl<T> Queue<T> for ListQueue<T> {
+        fn new() -> ListQueue<T> {
+            ListQueue {
+                list: LinkedList::new(),
+            }
+        }
+
+        fn push(&self, value: T) {
+            self.list.push(value);
+        }
+
+        fn pop(&self) -> Option<T> {
+            self.list.pop()
         }
 
         fn is_empty(&self) -> bool {

@@ -5,7 +5,9 @@ extern crate alloc;
 
 pub mod d_list;
 pub mod s_list;
+pub mod s_list_1;
 mod version_lock;
 
 pub use d_list::LinkedList as DoubleLinkedList;
 pub use s_list::LinkedList as SingleLinedList;
+pub use s_list_1::Queue;

@@ -14,7 +14,7 @@ readme = "./README.md"
 exclude = [".gitignore", "benches/**"]
 
 [dependencies]
-rcu_cell = "1.2.0"
+rcu_cell = { path = "../rcu_cell" }
 crossbeam-utils = "0.8.20"
 
 [dev-dependencies]
