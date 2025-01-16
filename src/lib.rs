@@ -11,4 +11,4 @@ pub use d_list::LinkedList as DoubleLinkedList;
 pub use s_list::LinkedList as SingleLinedList;
 
 // re-export
-pub use epoch_gc as epoch;
+pub use crossbeam_epoch as epoch;

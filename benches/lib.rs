@@ -82,8 +82,8 @@ fn con_mpmc(b: &mut Bencher) {
 
                 std::thread::spawn(move || {
                     barrier.wait();
-                    let guard = &epoch::pin();
-                    let entry = queue.push_back(0, guard);
+                    let guard = epoch::pin();
+                    let entry = queue.push_back(0, &guard);
                     let mut entry_vec = Vec::with_capacity(ITEMS);
                     entry_vec.push(entry);
                     for i in 1..ITEMS {
@@ -93,6 +93,12 @@ fn con_mpmc(b: &mut Bencher) {
 
                     for entry in entry_vec {
                         entry.remove();
+                    }
+
+                    // free memory
+                    drop(guard);
+                    for _ in 0..ITEMS.div_ceil(64 * 8) {
+                        epoch::pin().flush();
                     }
                 })
             })
