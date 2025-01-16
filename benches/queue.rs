@@ -6,7 +6,7 @@ use criterion::{criterion_group, criterion_main, Criterion};
 const THREADS: usize = 20;
 const ITEMS: usize = 1000;
 
-fn treiber_stack(c: &mut Criterion) {
+fn concurrent_queue(c: &mut Criterion) {
     c.bench_function("queue-rcu-single-list", |b| {
         b.iter(run::<rcu_single_list::ListQueue<usize>>)
     });
@@ -30,11 +30,52 @@ fn treiber_stack(c: &mut Criterion) {
     });
 }
 
+fn single_queue(c: &mut Criterion) {
+    c.bench_function("single_queue-rcu-single-list", |b| {
+        b.iter(single_run::<rcu_single_list::ListQueue<usize>>)
+    });
+
+    c.bench_function("single_queue-rcu-double-list-head", |b| {
+        b.iter(single_run::<rcu_double_list::ListQueue<usize>>)
+    });
+
+    c.bench_function("single_queue-rcu-double-list-tail", |b| {
+        b.iter(single_run::<rcu_double_list_rev::ListQueue<usize>>)
+    });
+
+    c.bench_function("single_scc_queue", |b| {
+        b.iter(single_run::<scc_queue::SccQueue<usize>>)
+    });
+
+    c.bench_function("single_queue-mutex-list", |b| {
+        b.iter(single_run::<mutex_single_list::MutexQueue<usize>>)
+    });
+
+    c.bench_function("single_crossbeam-queue", |b| {
+        b.iter(single_run::<crossbem_seg_queue::CrossbeamQueue<usize>>)
+    });
+}
+
 trait Queue<T> {
     fn new() -> Self;
     fn push(&self, value: T);
     fn pop(&self) -> Option<T>;
     fn is_empty(&self) -> bool;
+}
+
+fn single_run<T>()
+where
+    T: Queue<usize> + Send + Sync + 'static,
+{
+    let queue = T::new();
+
+    for i in 0..ITEMS * THREADS {
+        queue.push(i);
+        assert!(queue.pop().is_some());
+    }
+
+    assert!(queue.pop().is_none());
+    assert!(queue.is_empty());
 }
 
 fn run<T>()
@@ -73,7 +114,7 @@ where
     assert!(queue.is_empty());
 }
 
-criterion_group!(benches, treiber_stack);
+criterion_group!(benches, concurrent_queue, single_queue);
 criterion_main!(benches);
 
 mod rcu_single_list {
