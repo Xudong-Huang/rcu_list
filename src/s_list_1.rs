@@ -65,40 +65,40 @@ impl<T> Queue<T> {
         q
     }
 
-    /// Attempts to atomically place `n` into the `next` pointer of `onto`, and returns `true` on
-    /// success. The queue's `tail` pointer may be updated.
-    #[inline(always)]
-    fn push_internal(&self, onto: &Arc<Node<T>>, new: &Arc<Node<T>>) -> bool {
-        // is `onto` the actual tail?
-        match onto.next.read() {
-            Some(next) => {
-                // if not, try to "help" by moving the tail pointer forward
-                let _ = unsafe {
-                    self.tail
-                        .compare_exchange(Arc::as_ptr(onto), Some(&next), Release, Relaxed)
-                };
-                false
-            }
-            None => {
-                // looks like the actual tail; attempt to link in `n`
-                let result = unsafe {
-                    onto.next
-                        .compare_exchange(ptr::null(), Some(new), Release, Relaxed)
-                }
-                .is_ok();
-                if result {
-                    // try to move the tail pointer forward
-                    let _ = unsafe {
-                        self.tail
-                            .compare_exchange(Arc::as_ptr(onto), Some(new), Release, Relaxed)
-                    };
-                }
-                result
-            }
-        }
-    }
+    // /// Attempts to atomically place `n` into the `next` pointer of `onto`, and returns `true` on
+    // /// success. The queue's `tail` pointer may be updated.
+    // #[inline(always)]
+    // fn push_internal(&self, onto: &Arc<Node<T>>, new: &Arc<Node<T>>) -> bool {
+    //     // is `onto` the actual tail?
+    //     match onto.next.read() {
+    //         Some(next) => {
+    //             // if not, try to "help" by moving the tail pointer forward
+    //             let _ = unsafe {
+    //                 self.tail
+    //                     .compare_exchange(Arc::as_ptr(onto), Some(&next), Release, Relaxed)
+    //             };
+    //             false
+    //         }
+    //         None => {
+    //             // looks like the actual tail; attempt to link in `new`
+    //             let result = unsafe {
+    //                 onto.next
+    //                     .compare_exchange(ptr::null(), Some(new), Release, Relaxed)
+    //             }
+    //             .is_ok();
+    //             if result {
+    //                 // try to move the tail pointer forward
+    //                 let _ = unsafe {
+    //                     self.tail
+    //                         .compare_exchange(Arc::as_ptr(onto), Some(new), Release, Relaxed)
+    //                 };
+    //             }
+    //             result
+    //         }
+    //     }
+    // }
 
-    /// Adds `t` to the back of the queue, possibly waking up threads blocked on `pop`.
+    /// Adds `t` to the back of the queue
     pub fn push(&self, t: T) {
         let new = Arc::new(Node {
             data: MaybeUninit::new(t),
@@ -110,8 +110,30 @@ impl<T> Queue<T> {
             let tail = self.tail.read().unwrap();
 
             // Attempt to push onto the `tail` snapshot; fails if `tail.next` has changed.
-            if self.push_internal(&tail, &new) {
-                break;
+            match tail.next.read() {
+                Some(next) => {
+                    // if not, try to "help" by moving the tail pointer forward
+                    let _ = unsafe {
+                        self.tail
+                            .compare_exchange(tail.as_ref(), Some(&next), Release, Relaxed)
+                    };
+                }
+                None => {
+                    // looks like the actual tail; attempt to link in `new`
+                    let result = unsafe {
+                        tail.next
+                            .compare_exchange(ptr::null(), Some(&new), Release, Relaxed)
+                    }
+                    .is_ok();
+                    if result {
+                        // try to move the tail pointer forward
+                        let _ = unsafe {
+                            self.tail
+                                .compare_exchange(tail.as_ref(), Some(&new), Release, Relaxed)
+                        };
+                        break;
+                    }
+                }
             }
         }
     }
@@ -122,9 +144,11 @@ impl<T> Queue<T> {
         let head = self.head.read().unwrap();
         match head.next.read() {
             Some(next) => unsafe {
-                self.head
+                match self
+                    .head
                     .compare_exchange(Arc::as_ptr(&head), Some(&next), Release, Relaxed)
-                    .map(|_| {
+                {
+                    Ok(_) => {
                         let tail = self.tail.read().unwrap();
                         // Advance the tail so that we don't retire a pointer to a reachable node.
                         if Arc::ptr_eq(&head, &tail) {
@@ -135,9 +159,10 @@ impl<T> Queue<T> {
                                 Relaxed,
                             );
                         }
-                        Some(next.data.assume_init_read())
-                    })
-                    .map_err(|_| ())
+                        Ok(Some(next.data.assume_init_read()))
+                    }
+                    Err(_) => Err(()),
+                }
             },
             None => Ok(None),
         }
@@ -184,6 +209,7 @@ impl<T> Queue<T> {
             if let Ok(head) = self.pop_internal() {
                 return head;
             }
+            core::hint::spin_loop();
         }
     }
 
@@ -243,17 +269,13 @@ mod test {
 
         pub(crate) fn pop(&self) -> T {
             loop {
-                match self.try_pop() {
-                    None => continue,
-                    Some(t) => return t,
+                if let Some(t) = self.try_pop() {
+                    return t;
                 }
             }
         }
     }
 
-    #[cfg(miri)]
-    const CONC_COUNT: i64 = 1000;
-    #[cfg(not(miri))]
     const CONC_COUNT: i64 = 1000000;
 
     #[test]
@@ -320,9 +342,13 @@ mod test {
         }
         assert!(!q.is_empty());
         for i in 0..200 {
-            assert_eq!(q.pop(), i);
+            let x = q.pop();
+            // println!("x: {}", x);
+            assert_eq!(x, i);
         }
         assert!(q.is_empty());
+        // drop(q);
+        // println!("done!");
     }
 
     #[test]
