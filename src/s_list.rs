@@ -160,6 +160,42 @@ impl<'a, 'b, T> EntryImpl<'a, 'b, T> {
             next.next.read()
         })
     }
+
+    fn remove_after_if<F>(&self, condition: F) -> Option<Arc<Node<T>>>
+    where
+        F: Fn(&T) -> bool,
+    {
+        let mut condition_met = false;
+        let ret = self.node.next.update(|next| {
+            let next = match next {
+                Some(next) => next,
+                None => return None,
+            };
+
+            condition_met = condition(next.data.as_ref().unwrap());
+            if !condition_met {
+                // condition not met, do nothing
+                return Some(next);
+            }
+
+            self.list.tail.update(|tail| {
+                // tail is never none
+                let tail = tail.unwrap();
+                if Arc::ptr_eq(&tail, &next) {
+                    Some(self.node.clone())
+                } else {
+                    Some(tail)
+                }
+            });
+            next.next.read()
+        });
+
+        if !condition_met {
+            None
+        } else {
+            ret
+        }
+    }
 }
 
 /// Concurrent singly linked list
@@ -236,6 +272,16 @@ impl<T> LinkedList<T> {
             .map(|node| Entry { list: self, node })
     }
 
+    /// Removes the first element of the list if it satisfies the condition.
+    pub fn pop_front_if<F>(&self, condition: F) -> Option<Entry<T>>
+    where
+        F: Fn(&T) -> bool,
+    {
+        EntryImpl::new(self, &self.head)
+            .remove_after_if(condition)
+            .map(|node| Entry { list: self, node })
+    }
+
     /// Returns an iterator over the elements of the list.
     pub fn iter(&self) -> Iter<T> {
         Iter {
@@ -305,5 +351,16 @@ mod tests {
         assert_eq!(*iter.next().unwrap(), 2);
         assert_eq!(*iter.next().unwrap(), 3);
         assert!(iter.next().is_none());
+    }
+
+    #[test]
+    fn test_pop_if() {
+        let list = super::LinkedList::new();
+        list.push_back(1);
+        list.push_back(2);
+        list.push_back(3);
+
+        assert_eq!(list.pop_front_if(|x| *x == 2), None);
+        assert_eq!(list.pop_front_if(|x| *x == 1).as_deref(), Some(&1));
     }
 }
