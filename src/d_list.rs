@@ -1,6 +1,7 @@
 use alloc::sync::{Arc, Weak};
 use rcu_cell::{RcuCell, RcuWeak};
 
+use core::mem::MaybeUninit;
 use core::ops::Deref;
 use core::{cmp, fmt};
 
@@ -138,6 +139,129 @@ impl<T> Node<T> {
     }
 }
 
+/// A static entry in a `LinkedList`.
+/// this type lack of `remove_after` and `remove_ahead` operations
+/// since it's not reference to the list.
+#[derive(Clone)]
+pub struct StaticEntry<T> {
+    node: Arc<Node<T>>,
+}
+
+impl<T> StaticEntry<T> {
+    /// Returns true if the entry is removed.
+    pub fn is_removed(&self) -> bool {
+        self.node.is_removed()
+    }
+
+    /// Remove the entry from the list.
+    pub fn remove(&self) {
+        let dummy_list = MaybeUninit::uninit();
+        // Safety: we will not deref the dummy_list
+        let dummy_list_ref = unsafe { dummy_list.assume_init_ref() };
+
+        EntryImpl::new(dummy_list_ref, &self.node).remove()
+    }
+
+    /// Replace the entry with new value,
+    /// and return the old Entry which is marked as removed.
+    /// If the node is alredy removed, return the passed in value in Err().
+    /// Internally we create a new node to replace the old entry
+    pub fn replace(&self, elt: T) -> Result<StaticEntry<T>, T> {
+        let dummy_list = MaybeUninit::uninit();
+        // Safety: we will not deref the dummy_list
+        let dummy_list_ref = unsafe { dummy_list.assume_init_ref() };
+
+        EntryImpl::new(dummy_list_ref, &self.node)
+            .replace(elt)
+            .map(|v| v.into())
+    }
+
+    /// insert an element after the entry.
+    /// if the entry was removed, the element will be returned in Err()
+    pub fn insert_after(&self, elt: T) -> Result<StaticEntry<T>, T> {
+        let dummy_list = MaybeUninit::uninit();
+        // Safety: we will not deref the dummy_list
+        let dummy_list_ref = unsafe { dummy_list.assume_init_ref() };
+
+        EntryImpl::new(dummy_list_ref, &self.node)
+            .insert_after(elt)
+            .map(|v| v.into())
+    }
+
+    /// insert an element ahead the entry.
+    /// if the entry was removed, the element will be returned in Err()
+    pub fn insert_ahead(&self, elt: T) -> Result<StaticEntry<T>, T> {
+        let dummy_list = MaybeUninit::uninit();
+        // Safety: we will not deref the dummy_list
+        let dummy_list_ref = unsafe { dummy_list.assume_init_ref() };
+
+        EntryImpl::new(dummy_list_ref, &self.node)
+            .insert_ahead(elt)
+            .map(|v| v.into())
+    }
+}
+
+impl<T> Deref for StaticEntry<T> {
+    type Target = T;
+    fn deref(&self) -> &T {
+        self.node.data.as_ref().unwrap()
+    }
+}
+
+impl<T: fmt::Debug> fmt::Debug for StaticEntry<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "StaticEntry({:?})", self.node.data.as_ref().unwrap())
+    }
+}
+
+impl<T: PartialEq> PartialEq for StaticEntry<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.node.data == other.node.data
+    }
+}
+
+impl<T> AsRef<T> for StaticEntry<T> {
+    fn as_ref(&self) -> &T {
+        self.deref()
+    }
+}
+
+impl<T: PartialOrd> PartialOrd for StaticEntry<T> {
+    fn partial_cmp(&self, other: &Self) -> Option<cmp::Ordering> {
+        (**self).partial_cmp(&**other)
+    }
+
+    fn lt(&self, other: &Self) -> bool {
+        *(*self) < *(*other)
+    }
+
+    fn le(&self, other: &Self) -> bool {
+        *(*self) <= *(*other)
+    }
+
+    fn gt(&self, other: &Self) -> bool {
+        *(*self) > *(*other)
+    }
+
+    fn ge(&self, other: &Self) -> bool {
+        *(*self) >= *(*other)
+    }
+}
+
+impl<T> From<Entry<'_, T>> for StaticEntry<T> {
+    fn from(entry: Entry<'_, T>) -> Self {
+        StaticEntry { node: entry.node }
+    }
+}
+
+impl<T: Ord> Ord for StaticEntry<T> {
+    fn cmp(&self, other: &Self) -> cmp::Ordering {
+        (**self).cmp(&**other)
+    }
+}
+
+impl<T: Eq> Eq for StaticEntry<T> {}
+
 /// An entry in a `LinkedList`.
 #[derive(Clone)]
 pub struct Entry<'a, T> {
@@ -203,6 +327,11 @@ impl<'a, T> Entry<'a, T> {
             node: next,
         })
     }
+
+    /// convert to `StaticEntry`
+    pub fn into_static(self) -> StaticEntry<T> {
+        StaticEntry { node: self.node }
+    }
 }
 
 impl<T> Deref for Entry<'_, T> {
@@ -231,29 +360,29 @@ impl<T> AsRef<T> for Entry<'_, T> {
 }
 
 impl<T: PartialOrd> PartialOrd for Entry<'_, T> {
-    fn partial_cmp(&self, other: &Entry<T>) -> Option<cmp::Ordering> {
+    fn partial_cmp(&self, other: &Self) -> Option<cmp::Ordering> {
         (**self).partial_cmp(&**other)
     }
 
-    fn lt(&self, other: &Entry<T>) -> bool {
+    fn lt(&self, other: &Self) -> bool {
         *(*self) < *(*other)
     }
 
-    fn le(&self, other: &Entry<T>) -> bool {
+    fn le(&self, other: &Self) -> bool {
         *(*self) <= *(*other)
     }
 
-    fn gt(&self, other: &Entry<T>) -> bool {
+    fn gt(&self, other: &Self) -> bool {
         *(*self) > *(*other)
     }
 
-    fn ge(&self, other: &Entry<T>) -> bool {
+    fn ge(&self, other: &Self) -> bool {
         *(*self) >= *(*other)
     }
 }
 
 impl<T: Ord> Ord for Entry<'_, T> {
-    fn cmp(&self, other: &Entry<T>) -> cmp::Ordering {
+    fn cmp(&self, other: &Self) -> cmp::Ordering {
         (**self).cmp(&**other)
     }
 }
