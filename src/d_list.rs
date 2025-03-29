@@ -1,7 +1,6 @@
 use alloc::sync::{Arc, Weak};
 use rcu_cell::{RcuCell, RcuWeak};
 
-use core::mem::MaybeUninit;
 use core::ops::Deref;
 use core::{cmp, fmt};
 
@@ -148,6 +147,9 @@ pub struct StaticEntry<T> {
 }
 
 impl<T> StaticEntry<T> {
+    fn new(node: Arc<Node<T>>) -> Self {
+        StaticEntry { node }
+    }
     /// Returns true if the entry is removed.
     pub fn is_removed(&self) -> bool {
         self.node.is_removed()
@@ -155,11 +157,7 @@ impl<T> StaticEntry<T> {
 
     /// Remove the entry from the list.
     pub fn remove(&self) {
-        let dummy_list = MaybeUninit::uninit();
-        // Safety: we will not deref the dummy_list
-        let dummy_list_ref = unsafe { dummy_list.assume_init_ref() };
-
-        EntryImpl::new(dummy_list_ref, &self.node).remove()
+        EntryImpl::new(&self.node).remove()
     }
 
     /// Replace the entry with new value,
@@ -167,37 +165,25 @@ impl<T> StaticEntry<T> {
     /// If the node is alredy removed, return the passed in value in Err().
     /// Internally we create a new node to replace the old entry
     pub fn replace(&self, elt: T) -> Result<StaticEntry<T>, T> {
-        let dummy_list = MaybeUninit::uninit();
-        // Safety: we will not deref the dummy_list
-        let dummy_list_ref = unsafe { dummy_list.assume_init_ref() };
-
-        EntryImpl::new(dummy_list_ref, &self.node)
+        EntryImpl::new(&self.node)
             .replace(elt)
-            .map(|v| v.into())
+            .map(StaticEntry::new)
     }
 
     /// insert an element after the entry.
     /// if the entry was removed, the element will be returned in Err()
     pub fn insert_after(&self, elt: T) -> Result<StaticEntry<T>, T> {
-        let dummy_list = MaybeUninit::uninit();
-        // Safety: we will not deref the dummy_list
-        let dummy_list_ref = unsafe { dummy_list.assume_init_ref() };
-
-        EntryImpl::new(dummy_list_ref, &self.node)
+        EntryImpl::new(&self.node)
             .insert_after(elt)
-            .map(|v| v.into())
+            .map(StaticEntry::new)
     }
 
     /// insert an element ahead the entry.
     /// if the entry was removed, the element will be returned in Err()
     pub fn insert_ahead(&self, elt: T) -> Result<StaticEntry<T>, T> {
-        let dummy_list = MaybeUninit::uninit();
-        // Safety: we will not deref the dummy_list
-        let dummy_list_ref = unsafe { dummy_list.assume_init_ref() };
-
-        EntryImpl::new(dummy_list_ref, &self.node)
+        EntryImpl::new(&self.node)
             .insert_ahead(elt)
-            .map(|v| v.into())
+            .map(StaticEntry::new)
     }
 }
 
@@ -250,7 +236,7 @@ impl<T: PartialOrd> PartialOrd for StaticEntry<T> {
 
 impl<T> From<Entry<'_, T>> for StaticEntry<T> {
     fn from(entry: Entry<'_, T>) -> Self {
-        StaticEntry { node: entry.node }
+        entry.into_static()
     }
 }
 
@@ -275,34 +261,57 @@ impl<'a, T> Entry<'a, T> {
     /// If the node is alredy removed, return the passed in value in Err().
     /// Internally we create a new node to replace the old entry
     pub fn replace(&self, elt: T) -> Result<Entry<'a, T>, T> {
-        EntryImpl::new(self.list, &self.node).replace(elt)
+        EntryImpl::new(&self.node).replace(elt).map(|node| Entry {
+            list: self.list,
+            node,
+        })
     }
 
     /// Remove the entry from the list.
     pub fn remove(&self) {
-        EntryImpl::new(self.list, &self.node).remove()
+        EntryImpl::new(&self.node).remove()
     }
 
     /// insert an element after the entry.
     /// if the entry was removed, the element will be returned in Err()
     pub fn insert_after(&self, elt: T) -> Result<Entry<'a, T>, T> {
-        EntryImpl::new(self.list, &self.node).insert_after(elt)
+        EntryImpl::new(&self.node)
+            .insert_after(elt)
+            .map(|node| Entry {
+                list: self.list,
+                node,
+            })
     }
 
     /// insert an element ahead the entry.
     /// if the entry was removed, the element will be returned in Err()
     pub fn insert_ahead(&self, elt: T) -> Result<Entry<'a, T>, T> {
-        EntryImpl::new(self.list, &self.node).insert_ahead(elt)
+        EntryImpl::new(&self.node)
+            .insert_ahead(elt)
+            .map(|node| Entry {
+                list: self.list,
+                node,
+            })
     }
 
     /// Remove the entry after this entry.
     pub fn remove_after(&self) -> Option<Entry<'a, T>> {
-        EntryImpl::new(self.list, &self.node).remove_after()
+        EntryImpl::new(&self.node)
+            .remove_after(self.list)
+            .map(|node| Entry {
+                list: self.list,
+                node,
+            })
     }
 
     /// Remove the entry ahead this entry.
     pub fn remove_ahead(&self) -> Option<Entry<'a, T>> {
-        EntryImpl::new(self.list, &self.node).remove_ahead()
+        EntryImpl::new(&self.node)
+            .remove_ahead(self.list)
+            .map(|node| Entry {
+                list: self.list,
+                node,
+            })
     }
 
     /// Returns true if the entry is removed.
@@ -457,28 +466,32 @@ impl<T> LinkedList<T> {
 
     /// Pushes an element to the front of the list, and returns an Entry to it.
     pub fn push_front(&self, elt: T) -> Entry<T> {
-        match EntryImpl::new(self, &self.head).insert_after(elt) {
-            Ok(entry) => entry,
+        match EntryImpl::new(&self.head).insert_after(elt) {
+            Ok(node) => Entry { list: self, node },
             Err(_) => unreachable!("push_front should always success"),
         }
     }
 
     /// Pops the front element of the list, returns `None` if the list is empty.
     pub fn pop_front(&self) -> Option<Entry<T>> {
-        EntryImpl::new(self, &self.head).remove_after()
+        EntryImpl::new(&self.head)
+            .remove_after(self)
+            .map(|node| Entry { list: self, node })
     }
 
     /// Pushes an element to the back of the list, and returns an Entry to it.
     pub fn push_back(&self, elt: T) -> Entry<T> {
-        match EntryImpl::new(self, &self.tail).insert_ahead(elt) {
-            Ok(entry) => entry,
+        match EntryImpl::new(&self.tail).insert_ahead(elt) {
+            Ok(node) => Entry { list: self, node },
             Err(_) => unreachable!("push_back should always success"),
         }
     }
 
     /// Pops the back element of the list, returns `None` if the list is empty.
     pub fn pop_back(&self) -> Option<Entry<T>> {
-        EntryImpl::new(self, &self.tail).remove_ahead()
+        EntryImpl::new(&self.tail)
+            .remove_ahead(self)
+            .map(|node| Entry { list: self, node })
     }
 
     /// Returns an iterator over the elements of the list.
@@ -513,15 +526,14 @@ impl<'a, T> Iterator for Iter<'a, T> {
     }
 }
 
-struct EntryImpl<'a, 'b, T> {
-    list: &'a LinkedList<T>,
-    node: &'b Arc<Node<T>>,
+struct EntryImpl<'a, T> {
+    node: &'a Arc<Node<T>>,
 }
 
-impl<'a, 'b, T> EntryImpl<'a, 'b, T> {
+impl<'a, T> EntryImpl<'a, T> {
     #[inline]
-    fn new(list: &'a LinkedList<T>, node: &'b Arc<Node<T>>) -> Self {
-        Self { list, node }
+    fn new(node: &'a Arc<Node<T>>) -> Self {
+        Self { node }
     }
 
     /// Remove the entry from the list.
@@ -554,7 +566,7 @@ impl<'a, 'b, T> EntryImpl<'a, 'b, T> {
     }
 
     /// Replace the entry with new value,
-    fn replace(&self, elt: T) -> Result<Entry<'a, T>, T> {
+    fn replace(&self, elt: T) -> Result<Arc<Node<T>>, T> {
         let new_node = Arc::new(Node::new(elt));
         new_node.next.write(self.node.clone());
 
@@ -588,15 +600,12 @@ impl<'a, 'b, T> EntryImpl<'a, 'b, T> {
         drop(old_node_prev);
         drop(old_prev_next);
 
-        Ok(Entry {
-            list: self.list,
-            node: new_node,
-        })
+        Ok(new_node)
     }
 
     /// insert an element after the entry.
     /// if the entry was removed, the element will be returned in Err()
-    fn insert_after(&self, elt: T) -> Result<Entry<'a, T>, T> {
+    fn insert_after(&self, elt: T) -> Result<Arc<Node<T>>, T> {
         let new_node = Arc::new(Node::new(elt));
         new_node.set_prev_node(self.node);
 
@@ -626,14 +635,11 @@ impl<'a, 'b, T> EntryImpl<'a, 'b, T> {
         drop(old_next_prev);
         drop(old_head_next);
 
-        Ok(Entry {
-            list: self.list,
-            node: new_node,
-        })
+        Ok(new_node)
     }
 
     /// remove element after this entry
-    fn remove_after(&self) -> Option<Entry<'a, T>> {
+    fn remove_after(&self, list: &LinkedList<T>) -> Option<Arc<Node<T>>> {
         // move the drop out of locks
         let old_next_prev;
         let old_head_next;
@@ -644,7 +650,7 @@ impl<'a, 'b, T> EntryImpl<'a, 'b, T> {
         };
         {
             // there is no element after entry
-            if Arc::ptr_eq(&curr_node, &self.list.tail) {
+            if Arc::ptr_eq(&curr_node, &list.tail) {
                 self.node.unlock();
                 return None;
             }
@@ -665,14 +671,11 @@ impl<'a, 'b, T> EntryImpl<'a, 'b, T> {
         drop(old_next_prev);
         drop(old_head_next);
 
-        Some(Entry {
-            list: self.list,
-            node: curr_node,
-        })
+        Some(curr_node)
     }
 
     /// Insert an element ahead of the entry, and returns the new Entry to it.
-    pub fn insert_ahead(&self, elt: T) -> Result<Entry<'a, T>, T> {
+    pub fn insert_ahead(&self, elt: T) -> Result<Arc<Node<T>>, T> {
         let new_node = Arc::new(Node::new(elt));
         new_node.next.write(self.node.clone());
 
@@ -701,14 +704,11 @@ impl<'a, 'b, T> EntryImpl<'a, 'b, T> {
         drop(old_node_prev);
         drop(old_prev_next);
 
-        Ok(Entry {
-            list: self.list,
-            node: new_node,
-        })
+        Ok(new_node)
     }
 
     /// Remove the element ahead of the entry, returns `None` if the list is empty.
-    fn remove_ahead(&self) -> Option<Entry<'a, T>> {
+    fn remove_ahead(&self, list: &LinkedList<T>) -> Option<Arc<Node<T>>> {
         loop {
             // move the drop out of locks
             let old_node_prev;
@@ -726,7 +726,7 @@ impl<'a, 'b, T> EntryImpl<'a, 'b, T> {
             };
 
             // the list is empty
-            if Arc::ptr_eq(&curr_node, &self.list.head) {
+            if Arc::ptr_eq(&curr_node, &list.head) {
                 return None;
             }
 
@@ -758,10 +758,7 @@ impl<'a, 'b, T> EntryImpl<'a, 'b, T> {
             drop(old_node_prev);
             drop(old_prev_next);
 
-            return Some(Entry {
-                list: self.list,
-                node: curr_node,
-            });
+            return Some(curr_node);
         }
     }
 }
