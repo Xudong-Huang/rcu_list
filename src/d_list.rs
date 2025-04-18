@@ -141,7 +141,6 @@ impl<T> Node<T> {
 /// A static entry in a `LinkedList`.
 /// this type lack of `remove_after` and `remove_ahead` operations
 /// since it's not reference to the list.
-#[derive(Clone)]
 pub struct StaticEntry<T> {
     node: Arc<Node<T>>,
 }
@@ -184,6 +183,14 @@ impl<T> StaticEntry<T> {
         EntryImpl::new(&self.node)
             .insert_ahead(elt)
             .map(StaticEntry::new)
+    }
+}
+
+impl<T> Clone for StaticEntry<T> {
+    fn clone(&self) -> Self {
+        StaticEntry {
+            node: self.node.clone(),
+        }
     }
 }
 
@@ -249,7 +256,6 @@ impl<T: Ord> Ord for StaticEntry<T> {
 impl<T: Eq> Eq for StaticEntry<T> {}
 
 /// An entry in a `LinkedList`.
-#[derive(Clone)]
 pub struct Entry<'a, T> {
     list: &'a LinkedList<T>,
     node: Arc<Node<T>>,
@@ -340,6 +346,15 @@ impl<'a, T> Entry<'a, T> {
     /// convert to `StaticEntry`
     pub fn into_static(self) -> StaticEntry<T> {
         StaticEntry { node: self.node }
+    }
+}
+
+impl<T> Clone for Entry<'_, T> {
+    fn clone(&self) -> Self {
+        Entry {
+            list: self.list,
+            node: self.node.clone(),
+        }
     }
 }
 
