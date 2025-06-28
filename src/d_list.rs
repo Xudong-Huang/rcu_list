@@ -456,7 +456,7 @@ impl<T> LinkedList<T> {
 
     /// Returns an Entry to the front element, or `None` if the list is empty.
     #[inline]
-    pub fn front(&self) -> Option<Entry<T>> {
+    pub fn front(&self) -> Option<Entry<'_, T>> {
         // head.next is always non empty
         let node = self.head.next_node();
         // only the tail has None data
@@ -465,7 +465,7 @@ impl<T> LinkedList<T> {
 
     /// Returns an Entry to the back element, or `None` if the list is empty.
     #[inline]
-    pub fn back(&self) -> Option<Entry<T>> {
+    pub fn back(&self) -> Option<Entry<'_, T>> {
         // tail.prev is always non empty
         let node = loop {
             match self.tail.prev_node() {
@@ -480,7 +480,7 @@ impl<T> LinkedList<T> {
     }
 
     /// Pushes an element to the front of the list, and returns an Entry to it.
-    pub fn push_front(&self, elt: T) -> Entry<T> {
+    pub fn push_front(&self, elt: T) -> Entry<'_, T> {
         match EntryImpl::new(&self.head).insert_after(elt) {
             Ok(node) => Entry { list: self, node },
             Err(_) => unreachable!("push_front should always success"),
@@ -488,14 +488,14 @@ impl<T> LinkedList<T> {
     }
 
     /// Pops the front element of the list, returns `None` if the list is empty.
-    pub fn pop_front(&self) -> Option<Entry<T>> {
+    pub fn pop_front(&self) -> Option<Entry<'_, T>> {
         EntryImpl::new(&self.head)
             .remove_after(self)
             .map(|node| Entry { list: self, node })
     }
 
     /// Pushes an element to the back of the list, and returns an Entry to it.
-    pub fn push_back(&self, elt: T) -> Entry<T> {
+    pub fn push_back(&self, elt: T) -> Entry<'_, T> {
         match EntryImpl::new(&self.tail).insert_ahead(elt) {
             Ok(node) => Entry { list: self, node },
             Err(_) => unreachable!("push_back should always success"),
@@ -503,7 +503,7 @@ impl<T> LinkedList<T> {
     }
 
     /// Pops the back element of the list, returns `None` if the list is empty.
-    pub fn pop_back(&self) -> Option<Entry<T>> {
+    pub fn pop_back(&self) -> Option<Entry<'_, T>> {
         EntryImpl::new(&self.tail)
             .remove_ahead(self)
             .map(|node| Entry { list: self, node })
@@ -511,7 +511,7 @@ impl<T> LinkedList<T> {
 
     /// Returns an iterator over the elements of the list.
     #[inline]
-    pub fn iter(&self) -> Iter<T> {
+    pub fn iter(&self) -> Iter<'_, T> {
         Iter {
             list: self,
             curr: self.head.clone(),

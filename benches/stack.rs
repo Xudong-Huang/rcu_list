@@ -119,7 +119,7 @@ mod seize_stack {
 
             loop {
                 let head = guard.protect(&self.head, Ordering::Relaxed);
-                unsafe { (*node).next = head }
+                unsafe { (&mut (*node)).next = head }
 
                 if self
                     .head
@@ -137,7 +137,7 @@ mod seize_stack {
             loop {
                 let head = NonNull::new(guard.protect(&self.head, Ordering::Acquire))?.as_ptr();
 
-                let next = unsafe { (*head).next };
+                let next = unsafe { (&(*head)).next };
 
                 if self
                     .head
@@ -145,7 +145,7 @@ mod seize_stack {
                     .is_ok()
                 {
                     unsafe {
-                        let data = ptr::read(&(*head).data);
+                        let data = ptr::read(&(&(*head)).data);
                         self.collector
                             .retire(head, reclaim::boxed::<Linked<Node<T>>>);
                         return Some(ManuallyDrop::into_inner(data));

@@ -234,17 +234,17 @@ impl<T> LinkedList<T> {
     }
 
     /// Returns the first element of the list, or None if the list is empty.
-    pub fn front(&self) -> Option<Entry<T>> {
+    pub fn front(&self) -> Option<Entry<'_, T>> {
         self.head.next.read().map(|node| Entry { list: self, node })
     }
 
     /// Returns the last element of the list, or None if the list is empty.
-    pub fn back(&self) -> Option<Entry<T>> {
+    pub fn back(&self) -> Option<Entry<'_, T>> {
         self.tail.read().map(|node| Entry { list: self, node })
     }
 
     /// Appends an element to the back of the list
-    pub fn push_back(&self, elt: T) -> Entry<T> {
+    pub fn push_back(&self, elt: T) -> Entry<'_, T> {
         let node = Arc::new(Node::new(elt));
 
         let new_node = node.clone();
@@ -266,14 +266,14 @@ impl<T> LinkedList<T> {
     }
 
     /// Removes the first element of the list and returns it,
-    pub fn pop_front(&self) -> Option<Entry<T>> {
+    pub fn pop_front(&self) -> Option<Entry<'_, T>> {
         EntryImpl::new(self, &self.head)
             .remove_after()
             .map(|node| Entry { list: self, node })
     }
 
     /// Removes the first element of the list if it satisfies the condition.
-    pub fn pop_front_if<F>(&self, condition: F) -> Option<Entry<T>>
+    pub fn pop_front_if<F>(&self, condition: F) -> Option<Entry<'_, T>>
     where
         F: Fn(&T) -> bool,
     {
@@ -283,7 +283,7 @@ impl<T> LinkedList<T> {
     }
 
     /// Returns an iterator over the elements of the list.
-    pub fn iter(&self) -> Iter<T> {
+    pub fn iter(&self) -> Iter<'_, T> {
         Iter {
             list: self,
             curr: self.head.clone(),
