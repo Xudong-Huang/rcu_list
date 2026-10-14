@@ -7,20 +7,19 @@ authors = ["Xudong Huang <huangxu008@hotmail.com>"]
 categories = ["concurrency", "data-structures", "no-std"]
 keywords = ["rcu", "lockless", "atomic", "list"]
 repository = "https://github.com/Xudong-Huang/rcu_list"
-homepage = "https://github.com/Xudong-Huang/rcu_list"
 documentation = "https://docs.rs/rcu_list"
 license = "LGPL-3.0"
 readme = "./README.md"
 exclude = [".gitignore", "benches/**"]
 
 [dependencies]
-rcu_cell = "1.2.0"
+rcu_cell = "1.2.2"
 crossbeam-utils = "0.8.20"
 
 [dev-dependencies]
-scc = "2.2.5"
-seize = "0.4.9"
-criterion = "0.5"
+scc = "3.8.8"
+seize = "0.5.1"
+criterion = "0.8"
 parking_lot = "0.12"
 crossbeam-epoch = "0.9.8"
 crossbeam-queue = "0.3.11"
