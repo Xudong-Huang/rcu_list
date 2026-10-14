@@ -66,7 +66,7 @@ impl<T: fmt::Debug> fmt::Debug for Entry<'_, T> {
 
 impl<T: PartialEq> PartialEq for Entry<'_, T> {
     fn eq(&self, other: &Self) -> bool {
-        self.node.data == other.node.data
+        Arc::ptr_eq(&self.node, &other.node) || self.node.data == other.node.data
     }
 }
 
@@ -100,6 +100,9 @@ impl<T: PartialOrd> PartialOrd for Entry<'_, T> {
 
 impl<T: Ord> Ord for Entry<'_, T> {
     fn cmp(&self, other: &Entry<T>) -> cmp::Ordering {
+        if Arc::ptr_eq(&self.node, &other.node) {
+            return cmp::Ordering::Equal;
+        }
         (**self).cmp(&**other)
     }
 }
