@@ -8,7 +8,7 @@ categories = ["concurrency", "data-structures", "no-std"]
 keywords = ["rcu", "lockless", "atomic", "list"]
 repository = "https://github.com/Xudong-Huang/rcu_list"
 documentation = "https://docs.rs/rcu_list"
-license = "LGPL-3.0"
+license = "MIT"
 readme = "./README.md"
 exclude = [".gitignore", "benches/**"]
 
