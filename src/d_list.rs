@@ -329,18 +329,15 @@ impl<'a, T> Entry<'a, T> {
     }
 
     /// Returns the next entry in the list.
-    /// Returns `None` if the entry is removed.
+    /// Returns `None` if the entry is removed or is the last entry.
     pub fn next(&self) -> Option<Entry<'a, T>> {
         if self.is_removed() {
             return None;
         }
 
         let next = self.node.next.read()?;
-        if Arc::ptr_eq(&self.node, &self.list.tail) {
-            // we will not return the tail node as an entry
-            return None;
-        }
-        Some(Entry {
+        // only the tail node has None data, never return it as an entry
+        next.data.is_some().then(|| Entry {
             list: self.list,
             node: next,
         })
@@ -951,5 +948,37 @@ mod tests {
         assert_eq!(*iter.next().unwrap(), 100);
         assert_eq!(*iter.next().unwrap(), 3);
         assert!(iter.next().is_none());
+    }
+
+    #[test]
+    fn entry_next() {
+        use alloc::vec;
+        use alloc::vec::Vec;
+
+        let list = super::LinkedList::new();
+        list.push_back(1);
+        list.push_back(2);
+        list.push_back(3);
+
+        // Walk through `Entry::next`; the last element must return `None`
+        // instead of exposing the tail sentinel.
+        let mut values = Vec::new();
+        let mut entry = list.front();
+        while let Some(e) = entry {
+            values.push(*e);
+            entry = e.next();
+        }
+        assert_eq!(values, vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn entry_next_last_and_removed() {
+        let list = super::LinkedList::new();
+        let entry = list.push_back(1);
+        assert!(entry.next().is_none());
+
+        entry.remove();
+        assert!(entry.next().is_none());
+        assert!(list.is_empty());
     }
 }
