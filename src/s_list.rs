@@ -249,7 +249,9 @@ impl<T> LinkedList<T> {
 
     /// Returns the last element of the list, or None if the list is empty.
     pub fn back(&self) -> Option<Entry<'_, T>> {
-        self.tail.read().map(|node| Entry { list: self, node })
+        let node = self.tail.read()?;
+        // on an empty list the tail is the head node, which has None data
+        node.data.is_some().then(|| Entry { list: self, node })
     }
 
     /// Appends an element to the back of the list
@@ -421,5 +423,42 @@ mod tests {
 
         assert_eq!(list.pop_front_if(|x| *x == 2), None);
         assert_eq!(list.pop_front_if(|x| *x == 1).as_deref(), Some(&1));
+    }
+
+    #[test]
+    fn empty_front_back() {
+        let list: super::LinkedList<i32> = super::LinkedList::new();
+        assert!(list.is_empty());
+        // the tail is the head node on an empty list, neither end is an entry
+        assert!(list.front().is_none());
+        assert!(list.back().is_none());
+    }
+
+    #[test]
+    fn back_after_pop_last() {
+        let list = super::LinkedList::new();
+        list.push_back(1);
+        assert_eq!(*list.back().unwrap(), 1);
+
+        assert_eq!(*list.pop_front().unwrap(), 1);
+        assert!(list.is_empty());
+        assert!(list.back().is_none());
+        assert!(list.front().is_none());
+    }
+
+    #[test]
+    fn back_with_both_ends() {
+        let list = super::LinkedList::new();
+        list.push_front(2);
+        list.push_back(0);
+        assert_eq!(*list.front().unwrap(), 2);
+        assert_eq!(*list.back().unwrap(), 0);
+        assert!(!list.is_empty());
+
+        assert_eq!(*list.pop_front().unwrap(), 2);
+        assert_eq!(*list.back().unwrap(), 0);
+
+        assert_eq!(*list.pop_front().unwrap(), 0);
+        assert!(list.back().is_none());
     }
 }
