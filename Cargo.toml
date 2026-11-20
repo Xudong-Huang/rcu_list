@@ -12,6 +12,11 @@ license = "MIT"
 readme = "./README.md"
 exclude = [".gitignore", "benches/**"]
 
+[features]
+# Enables the nightly-only `test::Bencher` micro benchmarks in benches/lib.rs,
+# run them with `cargo +nightly bench --features nightly-bench`.
+nightly-bench = []
+
 [dependencies]
 rcu_cell = "1.2.5"
 crossbeam-utils = "0.8.20"
@@ -23,6 +28,10 @@ criterion = "0.8"
 parking_lot = "0.13"
 crossbeam-epoch = "0.9.8"
 crossbeam-queue = "0.3.11"
+
+[[bench]]
+name = "lib"
+required-features = ["nightly-bench"]
 
 [[bench]]
 name = "stack"
