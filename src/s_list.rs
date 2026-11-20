@@ -135,16 +135,16 @@ impl<'a, 'b, T> EntryImpl<'a, 'b, T> {
 
         self.node.next.update(|next| {
             if let Some(next) = next {
-                new_node.next.write(next);
+                new_node.next.write(next.clone());
             } else {
                 // update the tail to the new node
                 self.list.tail.update(|tail| {
                     // tail is never none
                     let tail = tail.unwrap();
-                    if Arc::ptr_eq(&tail, self.node) {
+                    if Arc::ptr_eq(tail, self.node) {
                         Some(new_node.clone())
                     } else {
-                        Some(tail)
+                        Some(tail.clone())
                     }
                 });
             }
@@ -159,15 +159,10 @@ impl<'a, 'b, T> EntryImpl<'a, 'b, T> {
                 Some(next) => next,
                 None => return None,
             };
-            self.list.tail.update(|tail| {
-                // tail is never none
-                let tail = tail.unwrap();
-                if Arc::ptr_eq(&tail, &next) {
-                    Some(self.node.clone())
-                } else {
-                    Some(tail)
-                }
-            });
+            // Only move the tail back if `next` is still the tail. A real CAS
+            // is required: it must serialize with push_back's tail update, and
+            // it must happen before the new `head.next` is published below.
+            let _ = self.list.tail.compare_and_swap(next, Some(self.node));
             next.next.read()
         })
     }
@@ -186,18 +181,12 @@ impl<'a, 'b, T> EntryImpl<'a, 'b, T> {
             condition_met = condition(next.data.as_ref().unwrap());
             if !condition_met {
                 // condition not met, do nothing
-                return Some(next);
+                return Some(next.clone());
             }
 
-            self.list.tail.update(|tail| {
-                // tail is never none
-                let tail = tail.unwrap();
-                if Arc::ptr_eq(&tail, &next) {
-                    Some(self.node.clone())
-                } else {
-                    Some(tail)
-                }
-            });
+            // Only move the tail back if `next` is still the tail; see
+            // `remove_after`.
+            let _ = self.list.tail.compare_and_swap(next, Some(self.node));
             next.next.read()
         });
 
@@ -275,7 +264,7 @@ impl<T> LinkedList<T> {
         self.tail.update(|tail| {
             // tail is never none
             let old_tail = tail.unwrap();
-            if Arc::ptr_eq(&old_tail, &self.head) {
+            if Arc::ptr_eq(old_tail, &self.head) {
                 // The tail still points at the head sentinel: either the list
                 // is empty, or a concurrent pop_front has already moved the
                 // tail back but has not published the empty head.next yet.
@@ -284,7 +273,7 @@ impl<T> LinkedList<T> {
                 // the lock order used by push_front/pop_front and could
                 // deadlock. Leave the tail unchanged and use the slow path.
                 tail_is_head = true;
-                Some(old_tail)
+                Some(old_tail.clone())
             } else {
                 old_tail.next.write(new_next);
                 Some(new_tail)
@@ -305,7 +294,7 @@ impl<T> LinkedList<T> {
             self.tail.update(|tail| {
                 // tail is never none
                 let old_tail = tail.unwrap();
-                if Arc::ptr_eq(&old_tail, &self.head) {
+                if Arc::ptr_eq(old_tail, &self.head) {
                     // Still empty: the outer update publishes the new node as
                     // head.next, so head.next must not be written here.
                     tail_was_head = true;
@@ -322,7 +311,7 @@ impl<T> LinkedList<T> {
             if tail_was_head {
                 Some(node.clone())
             } else {
-                head_next
+                head_next.cloned()
             }
         });
 

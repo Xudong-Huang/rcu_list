@@ -298,7 +298,7 @@ mod rcu_stack {
 
             self.head.update(|head| {
                 if let Some(h) = head {
-                    node.next.write(h);
+                    node.next.write(h.clone());
                 }
                 Some(node)
             });
