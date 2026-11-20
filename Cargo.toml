@@ -13,14 +13,14 @@ readme = "./README.md"
 exclude = [".gitignore", "benches/**"]
 
 [dependencies]
-rcu_cell = "1.2.2"
+rcu_cell = "1.2.5"
 crossbeam-utils = "0.8.20"
 
 [dev-dependencies]
 scc = "3.8.8"
 seize = "0.5.1"
 criterion = "0.8"
-parking_lot = "0.12"
+parking_lot = "0.13"
 crossbeam-epoch = "0.9.8"
 crossbeam-queue = "0.3.11"
 

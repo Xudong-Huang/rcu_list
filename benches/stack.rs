@@ -426,7 +426,7 @@ mod scc_stack {
         }
 
         fn push(&self, value: T) {
-            self.list.push(value);
+            unsafe { self.list.push_unchecked(value) };
         }
 
         fn pop(&self) -> Option<T> {

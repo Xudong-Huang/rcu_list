@@ -8,4 +8,4 @@ pub mod s_list;
 mod version_lock;
 
 pub use d_list::LinkedList as DoubleLinkedList;
-pub use s_list::LinkedList as SingleLinedList;
+pub use s_list::LinkedList as SingleLinkedList;

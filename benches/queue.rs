@@ -267,7 +267,7 @@ mod scc_queue {
         }
 
         fn push(&self, value: T) {
-            self.queue.push(value);
+            unsafe { self.queue.push_unchecked(value) };
         }
 
         fn pop(&self) -> Option<T> {
