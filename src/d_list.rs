@@ -26,6 +26,74 @@ impl<T> Default for Node<T> {
     }
 }
 
+/// RAII guard for a locked `Node`. It unlocks the node when dropped, or marks
+/// it as removed if [`NodeGuard::remove`] was called, so a panic while a node
+/// is locked (an assertion here or an unwrap in the caller) cannot leave the
+/// node locked forever and deadlock other operations.
+///
+/// The guard borrows the lock instead of holding a strong reference to the
+/// node, so locking does not touch the node's reference count.
+struct NodeGuard<'a> {
+    version: &'a VersionLock,
+    remove: bool,
+}
+
+impl<'a> NodeGuard<'a> {
+    #[inline]
+    fn new(version: &'a VersionLock) -> Self {
+        NodeGuard {
+            version,
+            remove: false,
+        }
+    }
+
+    /// unlock the node and mark it as removed
+    #[inline]
+    fn remove(mut self) {
+        self.remove = true;
+    }
+}
+
+impl Drop for NodeGuard<'_> {
+    fn drop(&mut self) {
+        if self.remove {
+            self.version.unlock_remove();
+        } else {
+            self.version.unlock();
+        }
+    }
+}
+
+/// RAII guard for a locked `Node` that the caller owns. It is used when the
+/// locked node has to be returned from the locking function, where a borrowing
+/// guard cannot be used. Owning the node avoids cloning its `Arc`.
+struct OwnedNodeGuard<T> {
+    node: Arc<Node<T>>,
+}
+
+impl<T> OwnedNodeGuard<T> {
+    /// lock the node and take ownership of it
+    fn lock(node: Arc<Node<T>>) -> Result<Self, LockErr> {
+        node.version.lock()?;
+        // the guard owns the node before anything can panic below
+        let guard = OwnedNodeGuard { node };
+        let next_node = guard.node.next_node();
+        assert!(next_node.prev_eq(&guard.node));
+        Ok(guard)
+    }
+
+    #[inline]
+    fn node(&self) -> &Arc<Node<T>> {
+        &self.node
+    }
+}
+
+impl<T> Drop for OwnedNodeGuard<T> {
+    fn drop(&mut self) {
+        self.node.version.unlock();
+    }
+}
+
 impl<T> Node<T> {
     #[inline]
     fn new(data: T) -> Self {
@@ -38,27 +106,21 @@ impl<T> Node<T> {
     }
 
     #[inline]
-    fn try_lock(&self) -> Result<usize, LockErr> {
-        self.version.try_lock()
+    fn try_lock(&self) -> Result<NodeGuard<'_>, LockErr> {
+        self.version.try_lock()?;
+        Ok(NodeGuard::new(&self.version))
     }
 
-    // lock the current node and return it's next node
+    // lock the current node and return it's next node with the lock guard
     #[inline]
-    fn lock(self: &Arc<Self>) -> Result<Arc<Node<T>>, LockErr> {
+    fn lock(self: &Arc<Self>) -> Result<(Arc<Node<T>>, NodeGuard<'_>), LockErr> {
         self.version.lock()?;
+        // the guard is created before anything can panic, so the node is
+        // unlocked even if the assertion below fails
+        let guard = NodeGuard::new(&self.version);
         let next_node = self.next_node();
         assert!(next_node.prev_eq(self));
-        Ok(next_node)
-    }
-
-    #[inline]
-    fn unlock(&self) {
-        self.version.unlock();
-    }
-
-    #[inline]
-    fn unlock_remove(&self) {
-        self.version.unlock_remove();
+        Ok((next_node, guard))
     }
 
     #[inline]
@@ -92,7 +154,7 @@ impl<T> Node<T> {
         self.next.read().unwrap()
     }
 
-    fn lock_prev_node(self: &Arc<Self>) -> Result<Arc<Node<T>>, LockErr> {
+    fn lock_prev_node(self: &Arc<Self>) -> Result<OwnedNodeGuard<T>, LockErr> {
         let backoff = crossbeam_utils::Backoff::new();
         loop {
             let prev_node = match self.prev_node() {
@@ -112,28 +174,31 @@ impl<T> Node<T> {
             };
 
             // if the prev node is removed, try again
-            if prev_node.lock().is_err() {
-                backoff.spin();
-                continue;
-            }
+            // the guard owns the prev node and unlocks it on drop
+            let guard = match OwnedNodeGuard::lock(prev_node) {
+                Ok(guard) => guard,
+                Err(_) => {
+                    backoff.spin();
+                    continue;
+                }
+            };
 
-            // check current node is not removed
+            // check current node is not removed, the guard unlocks the prev
+            // node on the early return
             if self.is_removed() {
-                prev_node.unlock();
                 return Err(LockErr::Removed);
             }
 
             // if the prev node is changed, try again
-            if !prev_node.next.arc_eq(self) {
-                prev_node.unlock();
+            if !guard.node().next.arc_eq(self) {
                 backoff.reset();
                 continue;
             }
 
-            assert!(self.prev_eq(&prev_node));
+            assert!(self.prev_eq(guard.node()));
 
             // successfully lock the prev node
-            return Ok(prev_node);
+            return Ok(guard);
         }
     }
 }
@@ -557,8 +622,8 @@ impl<'a, T> EntryImpl<'a, T> {
     /// Remove the entry from the list.
     fn remove(self) {
         let curr_node = self.node;
-        let prev_node = match curr_node.lock_prev_node() {
-            Ok(node) => node,
+        let prev_guard = match curr_node.lock_prev_node() {
+            Ok(guard) => guard,
             // the current node is already removed
             Err(_) => return,
         };
@@ -569,15 +634,15 @@ impl<'a, T> EntryImpl<'a, T> {
 
         {
             // unwrap safety: the prev node is locked
-            let next_node = curr_node.lock().unwrap();
+            let (next_node, curr_guard) = curr_node.lock().unwrap();
             {
-                old_node_prev = next_node.set_prev_node(&prev_node);
-                old_prev_next = prev_node.next.write(next_node);
+                old_node_prev = next_node.set_prev_node(prev_guard.node());
+                old_prev_next = prev_guard.node().next.write(next_node);
             }
-            curr_node.unlock_remove();
+            curr_guard.remove();
             curr_node.clear_prev_node();
         }
-        prev_node.unlock();
+        drop(prev_guard);
 
         drop(old_node_prev);
         drop(old_prev_next);
@@ -592,28 +657,28 @@ impl<'a, T> EntryImpl<'a, T> {
         let old_node_prev;
         let old_prev_next;
 
-        let prev_node = match self.node.lock_prev_node() {
-            Ok(node) => node,
+        let prev_guard = match self.node.lock_prev_node() {
+            Ok(guard) => guard,
             Err(_) => {
                 let node = Arc::into_inner(new_node).unwrap();
                 return Err(node.data.unwrap());
             }
         };
         {
-            new_node.set_prev_node(&prev_node);
-            new_node.try_lock().unwrap();
-            self.node.lock().unwrap();
+            new_node.set_prev_node(prev_guard.node());
+            let new_guard = new_node.try_lock().unwrap();
+            let (_next_node, old_guard) = self.node.lock().unwrap();
             {
                 let next_node = self.node.next_node();
                 old_node_prev = next_node.set_prev_node(&new_node);
                 new_node.next.write(next_node.clone());
-                old_prev_next = prev_node.next.write(new_node.clone());
+                old_prev_next = prev_guard.node().next.write(new_node.clone());
             }
-            self.node.unlock_remove();
-            new_node.unlock();
+            old_guard.remove();
+            drop(new_guard);
             self.node.clear_prev_node();
         }
-        prev_node.unlock();
+        drop(prev_guard);
 
         drop(old_node_prev);
         drop(old_prev_next);
@@ -631,7 +696,7 @@ impl<'a, T> EntryImpl<'a, T> {
         let old_next_prev;
         let old_head_next;
 
-        let next_node = match self.node.lock() {
+        let (next_node, guard) = match self.node.lock() {
             Ok(node) => node,
             Err(_) => {
                 // current entry removed, can't insert
@@ -648,7 +713,7 @@ impl<'a, T> EntryImpl<'a, T> {
             }
             // new_node.unlock();
         }
-        self.node.unlock();
+        drop(guard);
 
         drop(old_next_prev);
         drop(old_head_next);
@@ -662,27 +727,26 @@ impl<'a, T> EntryImpl<'a, T> {
         let old_next_prev;
         let old_head_next;
 
-        let curr_node = match self.node.lock() {
+        let (curr_node, guard) = match self.node.lock() {
             Ok(node) => node,
             Err(_) => return None,
         };
         {
             // there is no element after entry
             if Arc::ptr_eq(&curr_node, &list.tail) {
-                self.node.unlock();
                 return None;
             }
 
             // unwrap safety: next must be valid since it's still in the list
-            let next_node = curr_node.lock().unwrap();
+            let (next_node, curr_guard) = curr_node.lock().unwrap();
             {
                 old_next_prev = next_node.set_prev_node(self.node);
                 old_head_next = self.node.next.write(next_node.clone());
             }
-            curr_node.unlock_remove();
+            curr_guard.remove();
             curr_node.clear_prev_node();
         }
-        self.node.unlock();
+        drop(guard);
 
         // don't clear the next field, could break the iterator
         // curr_node.next.take();
@@ -701,23 +765,23 @@ impl<'a, T> EntryImpl<'a, T> {
         let old_node_prev;
         let old_prev_next;
 
-        let prev_node = match self.node.lock_prev_node() {
-            Ok(node) => node,
+        let prev_guard = match self.node.lock_prev_node() {
+            Ok(guard) => guard,
             Err(_) => {
                 let node = Arc::into_inner(new_node).unwrap();
                 return Err(node.data.unwrap());
             }
         };
         {
-            new_node.set_prev_node(&prev_node);
+            new_node.set_prev_node(prev_guard.node());
             // new_node.try_lock().unwrap();
             {
                 old_node_prev = self.node.set_prev_node(&new_node);
-                old_prev_next = prev_node.next.write(new_node.clone());
+                old_prev_next = prev_guard.node().next.write(new_node.clone());
             }
             // new_node.unlock();
         }
-        prev_node.unlock();
+        drop(prev_guard);
 
         drop(old_node_prev);
         drop(old_prev_next);
@@ -749,29 +813,28 @@ impl<'a, T> EntryImpl<'a, T> {
             }
 
             // try to lock the node.prev.prev node
-            let prev_node = match curr_node.lock_prev_node() {
-                Ok(node) => node,
+            let prev_guard = match curr_node.lock_prev_node() {
+                Ok(guard) => guard,
                 Err(_) => continue,
             };
 
             {
                 // lock the curr node, curr node is not removed
-                let next_node = curr_node.lock().unwrap();
+                let (next_node, curr_guard) = curr_node.lock().unwrap();
                 {
                     // after lock curr_node some thing changed, try again
+                    // the guards unlock both nodes on continue
                     if !Arc::ptr_eq(&next_node, self.node) {
-                        curr_node.unlock();
-                        prev_node.unlock();
                         continue;
                     }
 
-                    old_node_prev = self.node.set_prev_node(&prev_node);
-                    old_prev_next = prev_node.next.write(next_node);
+                    old_node_prev = self.node.set_prev_node(prev_guard.node());
+                    old_prev_next = prev_guard.node().next.write(next_node);
                 }
-                curr_node.unlock_remove();
+                curr_guard.remove();
                 curr_node.clear_prev_node();
             }
-            prev_node.unlock();
+            drop(prev_guard);
 
             drop(old_node_prev);
             drop(old_prev_next);
@@ -783,6 +846,8 @@ impl<'a, T> EntryImpl<'a, T> {
 
 #[cfg(test)]
 mod tests {
+    extern crate std;
+
     #[test]
     fn test_list() {
         let list = super::LinkedList::new();
@@ -980,5 +1045,43 @@ mod tests {
         entry.remove();
         assert!(entry.next().is_none());
         assert!(list.is_empty());
+    }
+
+    #[test]
+    fn guard_remove_marks_removed() {
+        let node = alloc::sync::Arc::new(super::Node::new(1));
+        {
+            let guard = node.try_lock().unwrap();
+            guard.remove();
+        }
+        assert!(node.is_removed());
+        assert_eq!(node.try_lock().err(), Some(super::LockErr::Removed));
+    }
+
+    #[test]
+    fn panic_while_holding_locks_unlocks_nodes() {
+        use std::panic::{catch_unwind, AssertUnwindSafe};
+
+        let list = super::LinkedList::new();
+        let entry = list.push_back(1);
+        // mark the only element as removed without unlinking it, so
+        // pop_front takes the head lock and then panics on lock().unwrap()
+        {
+            let guard = entry.node.try_lock().unwrap();
+            guard.remove();
+        }
+
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            let _ = list.pop_front();
+        }));
+        assert!(result.is_err());
+
+        // the head node must have been unlocked while unwinding, or this
+        // would hang forever
+        assert!(list.head.try_lock().is_ok());
+
+        // unlink the removed node so dropping the list does not panic
+        list.head.next.write(list.tail.clone());
+        list.tail.set_prev_node(&list.head);
     }
 }
