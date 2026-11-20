@@ -87,7 +87,7 @@ impl VersionLock {
                 return Err(LockErr::Removed);
             }
             version = self.next_version(v);
-            backoff.snooze();
+            backoff.spin();
         }
 
         Ok(version)
@@ -118,6 +118,44 @@ impl VersionLock {
     // pub fn is_ready(&self) -> bool {
     //     self.version.load(Ordering::Relaxed) & 3 == 0
     // }
+}
+
+/// RAII guard for a locked [`VersionLock`]. It unlocks the lock when dropped,
+/// or marks it as removed if [`VersionLockGuard::remove`] was called, so a
+/// panic while the lock is held cannot leave it locked forever and deadlock
+/// other operations.
+///
+/// The guard borrows the lock instead of owning the guarded value, so locking
+/// does not touch its reference count.
+pub(crate) struct VersionLockGuard<'a> {
+    version: &'a VersionLock,
+    remove: bool,
+}
+
+impl<'a> VersionLockGuard<'a> {
+    #[inline]
+    pub(crate) fn new(version: &'a VersionLock) -> Self {
+        VersionLockGuard {
+            version,
+            remove: false,
+        }
+    }
+
+    /// unlock the lock and mark it as removed
+    #[inline]
+    pub(crate) fn remove(mut self) {
+        self.remove = true;
+    }
+}
+
+impl Drop for VersionLockGuard<'_> {
+    fn drop(&mut self) {
+        if self.remove {
+            self.version.unlock_remove();
+        } else {
+            self.version.unlock();
+        }
+    }
 }
 
 #[cfg(test)]

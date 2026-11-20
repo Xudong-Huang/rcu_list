@@ -4,7 +4,7 @@ use rcu_cell::{RcuCell, RcuWeak};
 use core::ops::Deref;
 use core::{cmp, fmt};
 
-use crate::version_lock::{LockErr, VersionLock};
+use crate::version_lock::{LockErr, VersionLock, VersionLockGuard};
 
 #[derive(Debug)]
 struct Node<T> {
@@ -26,44 +26,6 @@ impl<T> Default for Node<T> {
     }
 }
 
-/// RAII guard for a locked `Node`. It unlocks the node when dropped, or marks
-/// it as removed if [`NodeGuard::remove`] was called, so a panic while a node
-/// is locked (an assertion here or an unwrap in the caller) cannot leave the
-/// node locked forever and deadlock other operations.
-///
-/// The guard borrows the lock instead of holding a strong reference to the
-/// node, so locking does not touch the node's reference count.
-struct NodeGuard<'a> {
-    version: &'a VersionLock,
-    remove: bool,
-}
-
-impl<'a> NodeGuard<'a> {
-    #[inline]
-    fn new(version: &'a VersionLock) -> Self {
-        NodeGuard {
-            version,
-            remove: false,
-        }
-    }
-
-    /// unlock the node and mark it as removed
-    #[inline]
-    fn remove(mut self) {
-        self.remove = true;
-    }
-}
-
-impl Drop for NodeGuard<'_> {
-    fn drop(&mut self) {
-        if self.remove {
-            self.version.unlock_remove();
-        } else {
-            self.version.unlock();
-        }
-    }
-}
-
 /// RAII guard for a locked `Node` that the caller owns. It is used when the
 /// locked node has to be returned from the locking function, where a borrowing
 /// guard cannot be used. Owning the node avoids cloning its `Arc`.
@@ -77,8 +39,9 @@ impl<T> OwnedNodeGuard<T> {
         node.version.lock()?;
         // the guard owns the node before anything can panic below
         let guard = OwnedNodeGuard { node };
-        let next_node = guard.node.next_node();
-        assert!(next_node.prev_eq(&guard.node));
+        // the invariant check reads `next` and upgrades `prev`, which costs a
+        // few atomic operations on every lock, so only check in debug builds
+        debug_assert!(guard.node.next_node().prev_eq(&guard.node));
         Ok(guard)
     }
 
@@ -106,20 +69,21 @@ impl<T> Node<T> {
     }
 
     #[inline]
-    fn try_lock(&self) -> Result<NodeGuard<'_>, LockErr> {
+    fn try_lock(&self) -> Result<VersionLockGuard<'_>, LockErr> {
         self.version.try_lock()?;
-        Ok(NodeGuard::new(&self.version))
+        Ok(VersionLockGuard::new(&self.version))
     }
 
     // lock the current node and return it's next node with the lock guard
     #[inline]
-    fn lock(self: &Arc<Self>) -> Result<(Arc<Node<T>>, NodeGuard<'_>), LockErr> {
+    fn lock(self: &Arc<Self>) -> Result<(Arc<Node<T>>, VersionLockGuard<'_>), LockErr> {
         self.version.lock()?;
         // the guard is created before anything can panic, so the node is
         // unlocked even if the assertion below fails
-        let guard = NodeGuard::new(&self.version);
+        let guard = VersionLockGuard::new(&self.version);
         let next_node = self.next_node();
-        assert!(next_node.prev_eq(self));
+        // `prev_eq` upgrades the weak pointer, only pay for it in debug builds
+        debug_assert!(next_node.prev_eq(self));
         Ok((next_node, guard))
     }
 
@@ -195,7 +159,7 @@ impl<T> Node<T> {
                 continue;
             }
 
-            assert!(self.prev_eq(guard.node()));
+            debug_assert!(self.prev_eq(guard.node()));
 
             // successfully lock the prev node
             return Ok(guard);
