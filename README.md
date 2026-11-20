@@ -2,11 +2,11 @@
 
 This is a concurrent linked list implementation in Rust using [RcuCell](https://github.com/Xudong-Huang/rcu_cell).
 
-[![Build Status](https://github.com/Xudong-Huang/co_managed/workflows/CI/badge.svg)](https://github.com/Xudong-Huang/rcu_list/actions?query=workflow%3ACI)
+[![Build Status](https://github.com/Xudong-Huang/rcu_list/workflows/CI/badge.svg)](https://github.com/Xudong-Huang/rcu_list/actions?query=workflow%3ACI)
 [![Current Crates.io Version](https://img.shields.io/crates/v/rcu_list.svg)](https://crates.io/crates/rcu_list)
 [![Document](https://img.shields.io/badge/doc-rcu_list-green.svg)](https://docs.rs/rcu_list)
 
-There are two types of linked list: `SignleLinkedList` and `DoubleLinkedList`.
+There are two types of linked list: `SingleLinkedList` and `DoubleLinkedList`.
 
 ## SingleLinkedList
 The `SingleLinkedList` supports the following operations:
@@ -18,7 +18,7 @@ The `SingleLinkedList` supports the following operations:
 - `push_back`: Insert a new element into the tail of list.
 - `iter`: Iterate over the list.
 
-each `Entry` that returned by instert operations could do the following operations:
+each `Entry` that returned by insert operations could do the following operations:
 - `deref`: Read the value of the current element.
 
 ## DoubleLinkedList
@@ -34,7 +34,7 @@ The `DoubleLinkedList` supports the following operations:
 
 each `Entry` that returned by insert operations could do the following operations:
 - `remove`: Remove the current element from the list.
-- `replace`: Replace the current element from the list.
+- `replace`: Replace the current element with a new value.
 - `insert_after`: Insert an element after the entry.
 - `insert_ahead`: Insert an element ahead the entry.
 - `remove_after`: Remove the element after the entry.
@@ -46,7 +46,7 @@ each `Entry` that returned by insert operations could do the following operation
 Any write operations like insert/remove on a removed `Entry` would just fail.
 But it's safe to read(deref) the value of a removed `Entry`.
 
-### Note
+### Notes on `DoubleLinkedList`
 1. `push_front` has better performance than `push_back`, because it doesn't need to lock the previous element.
 2. `pop_front` has better performance than `pop_back`, because it doesn't need to lock the previous element.
 3. `pop_back` could result more efficient memory recycle than `pop_front`, because it less likely hold the next element.

@@ -224,10 +224,10 @@ impl<T> StaticEntry<T> {
         EntryImpl::new(&self.node).remove()
     }
 
-    /// Replace the entry with new value,
-    /// and return the old Entry which is marked as removed.
-    /// If the node is alredy removed, return the passed in value in Err().
-    /// Internally we create a new node to replace the old entry
+    /// Replace the entry with a new value and return an entry for the new
+    /// value. The old entry is marked as removed.
+    /// If the node is already removed, return the passed in value in `Err()`.
+    /// Internally we create a new node to replace the old entry.
     pub fn replace(&self, elt: T) -> Result<StaticEntry<T>, T> {
         EntryImpl::new(&self.node)
             .replace(elt)
@@ -330,10 +330,10 @@ pub struct Entry<'a, T> {
 }
 
 impl<'a, T> Entry<'a, T> {
-    /// Replace the entry with new value,
-    /// and return the old Entry which is marked as removed.
-    /// If the node is alredy removed, return the passed in value in Err().
-    /// Internally we create a new node to replace the old entry
+    /// Replace the entry with a new value and return an entry for the new
+    /// value. The old entry is marked as removed.
+    /// If the node is already removed, return the passed in value in `Err()`.
+    /// Internally we create a new node to replace the old entry.
     pub fn replace(&self, elt: T) -> Result<Entry<'a, T>, T> {
         EntryImpl::new(&self.node).replace(elt).map(|node| Entry {
             list: self.list,
@@ -1045,6 +1045,84 @@ mod tests {
         entry.remove();
         assert!(entry.next().is_none());
         assert!(list.is_empty());
+    }
+
+    #[test]
+    fn entry_insert_ahead() {
+        use alloc::vec;
+        use alloc::vec::Vec;
+
+        let list = super::LinkedList::new();
+        list.push_back(1);
+        let entry = list.push_back(2);
+        list.push_back(3);
+
+        entry.insert_ahead(100).unwrap();
+
+        let values: Vec<_> = list.iter().map(|e| *e).collect();
+        assert_eq!(values, vec![1, 100, 2, 3]);
+    }
+
+    #[test]
+    fn entry_remove_after() {
+        let list = super::LinkedList::new();
+        list.push_back(1);
+        let entry = list.push_back(2);
+        list.push_back(3);
+
+        let removed = entry.remove_after().unwrap();
+        assert_eq!(*removed, 3);
+        assert!(removed.is_removed());
+        assert!(list.iter().map(|e| *e).eq([1, 2]));
+
+        // there is nothing after the last entry
+        assert!(entry.remove_after().is_none());
+    }
+
+    #[test]
+    fn entry_remove_ahead() {
+        let list = super::LinkedList::new();
+        list.push_back(1);
+        let entry = list.push_back(3);
+
+        let removed = entry.remove_ahead().unwrap();
+        assert_eq!(*removed, 1);
+        assert!(removed.is_removed());
+        assert!(list.iter().map(|e| *e).eq([3]));
+
+        // there is nothing ahead of the first entry
+        assert!(entry.remove_ahead().is_none());
+    }
+
+    #[test]
+    fn static_entry_ops() {
+        let list = super::LinkedList::new();
+        list.push_back(1);
+        let entry = list.push_back(2).into_static();
+
+        assert_eq!(*entry, 2);
+
+        // insert on both sides
+        assert_eq!(*entry.insert_after(3).unwrap(), 3);
+        assert_eq!(*entry.insert_ahead(0).unwrap(), 0);
+        assert!(list.iter().map(|e| *e).eq([1, 0, 2, 3]));
+
+        // replace marks the old entry removed and returns the new one
+        let replaced = entry.replace(20).unwrap();
+        assert!(entry.is_removed());
+        assert_eq!(*replaced, 20);
+        assert!(list.iter().map(|e| *e).eq([1, 0, 20, 3]));
+
+        // write operations on a removed entry fail
+        assert_eq!(entry.insert_after(4), Err(4));
+        assert_eq!(entry.insert_ahead(4), Err(4));
+
+        // removing a removed entry is a no-op, removing a live one works
+        entry.remove();
+        assert!(list.iter().map(|e| *e).eq([1, 0, 20, 3]));
+        replaced.remove();
+        assert!(replaced.is_removed());
+        assert!(list.iter().map(|e| *e).eq([1, 0, 3]));
     }
 
     #[test]

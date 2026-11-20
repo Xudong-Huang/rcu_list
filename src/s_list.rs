@@ -34,10 +34,18 @@ impl<T> Node<T> {
 }
 
 /// An entry in a `LinkedList`. You can `deref` it to get the value.
-#[derive(Clone)]
 pub struct Entry<'a, T> {
     list: &'a LinkedList<T>,
     node: Arc<Node<T>>,
+}
+
+impl<T> Clone for Entry<'_, T> {
+    fn clone(&self) -> Self {
+        Entry {
+            list: self.list,
+            node: self.node.clone(),
+        }
+    }
 }
 
 impl<'a, T> Entry<'a, T> {
