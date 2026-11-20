@@ -202,6 +202,12 @@ impl<'a, 'b, T> EntryImpl<'a, 'b, T> {
 }
 
 /// Concurrent singly linked list
+///
+/// The `tail` cell only needs to be updated when the list becomes empty or
+/// stops being empty. Operations that touch both `head.next` and `tail`
+/// (`push_front`, `pop_front`, `remove_after_if`, and `push_back` on an
+/// empty list) must acquire `head.next` first and `tail` second; acquiring
+/// them in the opposite order can deadlock.
 #[derive(Debug)]
 pub struct LinkedList<T> {
     head: Arc<Node<T>>,
@@ -250,14 +256,64 @@ impl<T> LinkedList<T> {
     pub fn push_back(&self, elt: T) -> Entry<'_, T> {
         let node = Arc::new(Node::new(elt));
 
-        let new_node = node.clone();
-        let new_node1 = node.clone();
-
+        // Fast path: if the list is not empty, appending only needs the tail
+        // lock. The pushed node is linked after `old_tail` and becomes the new
+        // tail.
+        let mut tail_is_head = false;
+        let new_next = node.clone();
+        let new_tail = node.clone();
         self.tail.update(|tail| {
             // tail is never none
             let old_tail = tail.unwrap();
-            old_tail.next.write(new_node);
-            Some(new_node1)
+            if Arc::ptr_eq(&old_tail, &self.head) {
+                // The tail still points at the head sentinel: either the list
+                // is empty, or a concurrent pop_front has already moved the
+                // tail back but has not published the empty head.next yet.
+                // This needs both the head.next and the tail locks. Do not
+                // take head.next while holding tail here, that would invert
+                // the lock order used by push_front/pop_front and could
+                // deadlock. Leave the tail unchanged and use the slow path.
+                tail_is_head = true;
+                Some(old_tail)
+            } else {
+                old_tail.next.write(new_next);
+                Some(new_tail)
+            }
+        });
+        if !tail_is_head {
+            return Entry { list: self, node };
+        }
+
+        // Slow path for an empty list: acquire head.next first, then tail,
+        // the same order push_front/pop_front use. While head.next is locked
+        // no other thread can move the tail back to the head sentinel, and the
+        // fast path above never does either, so the emptiness check is stable.
+        let new_next = node.clone();
+        let new_tail = node.clone();
+        let mut tail_was_head = false;
+        self.head.next.update(|head_next| {
+            self.tail.update(|tail| {
+                // tail is never none
+                let old_tail = tail.unwrap();
+                if Arc::ptr_eq(&old_tail, &self.head) {
+                    // Still empty: the outer update publishes the new node as
+                    // head.next, so head.next must not be written here.
+                    tail_was_head = true;
+                } else {
+                    // A concurrent push_back added a node in the meantime;
+                    // append after the current tail instead.
+                    old_tail.next.write(new_next);
+                }
+                Some(new_tail)
+            });
+
+            // head.next is empty exactly when the tail is the head sentinel.
+            debug_assert_eq!(tail_was_head, head_next.is_none());
+            if tail_was_head {
+                Some(node.clone())
+            } else {
+                head_next
+            }
         });
 
         Entry { list: self, node }
