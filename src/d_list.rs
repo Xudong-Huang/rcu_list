@@ -167,9 +167,11 @@ impl<T> Node<T> {
     }
 }
 
-/// A static entry in a `LinkedList`.
-/// this type lack of `remove_after` and `remove_ahead` operations
-/// since it's not reference to the list.
+/// An owned entry in a `LinkedList`.
+///
+/// Unlike [`Entry`], a `StaticEntry` owns its node and does not borrow the
+/// list, so it can be stored independently. Since it is not tied to a list, it
+/// does not provide `next`, `remove_after` or `remove_ahead`.
 pub struct StaticEntry<T> {
     node: Arc<Node<T>>,
 }
@@ -198,16 +200,16 @@ impl<T> StaticEntry<T> {
             .map(StaticEntry::new)
     }
 
-    /// insert an element after the entry.
-    /// if the entry was removed, the element will be returned in Err()
+    /// Insert an element after the entry.
+    /// If the entry was removed, the element will be returned in `Err()`.
     pub fn insert_after(&self, elt: T) -> Result<StaticEntry<T>, T> {
         EntryImpl::new(&self.node)
             .insert_after(elt)
             .map(StaticEntry::new)
     }
 
-    /// insert an element ahead the entry.
-    /// if the entry was removed, the element will be returned in Err()
+    /// Insert an element ahead of the entry.
+    /// If the entry was removed, the element will be returned in `Err()`.
     pub fn insert_ahead(&self, elt: T) -> Result<StaticEntry<T>, T> {
         EntryImpl::new(&self.node)
             .insert_ahead(elt)
@@ -310,8 +312,8 @@ impl<'a, T> Entry<'a, T> {
         EntryImpl::new(&self.node).remove()
     }
 
-    /// insert an element after the entry.
-    /// if the entry was removed, the element will be returned in Err()
+    /// Insert an element after the entry.
+    /// If the entry was removed, the element will be returned in `Err()`.
     pub fn insert_after(&self, elt: T) -> Result<Entry<'a, T>, T> {
         EntryImpl::new(&self.node)
             .insert_after(elt)
@@ -321,8 +323,8 @@ impl<'a, T> Entry<'a, T> {
             })
     }
 
-    /// insert an element ahead the entry.
-    /// if the entry was removed, the element will be returned in Err()
+    /// Insert an element ahead of the entry.
+    /// If the entry was removed, the element will be returned in `Err()`.
     pub fn insert_ahead(&self, elt: T) -> Result<Entry<'a, T>, T> {
         EntryImpl::new(&self.node)
             .insert_ahead(elt)
@@ -372,7 +374,7 @@ impl<'a, T> Entry<'a, T> {
         })
     }
 
-    /// convert to `StaticEntry`
+    /// Convert to `StaticEntry`.
     pub fn into_static(self) -> StaticEntry<T> {
         StaticEntry { node: self.node }
     }
@@ -446,8 +448,9 @@ impl<T: Ord> Ord for Entry<'_, T> {
 impl<T: Eq> Eq for Entry<'_, T> {}
 
 /// A concurrent doubly linked list.
-/// Internally it use fine-grained double locks to ensure thread safety.
-/// The readers like `iter`, `front` and `back` don't need to get locks.
+///
+/// Internally it uses fine-grained per-node locks to ensure thread safety.
+/// Readers such as `iter`, `front` and `back` do not need to acquire locks.
 #[derive(Debug)]
 pub struct LinkedList<T> {
     head: Arc<Node<T>>,

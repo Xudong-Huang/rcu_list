@@ -4,6 +4,7 @@ use alloc::sync::Arc;
 use rcu_cell::RcuCell;
 
 use core::ops::Deref;
+use core::sync::atomic::Ordering;
 use core::{cmp, fmt};
 
 #[derive(Debug)]
@@ -49,7 +50,7 @@ impl<T> Clone for Entry<'_, T> {
 }
 
 impl<'a, T> Entry<'a, T> {
-    /// Returns the next entry in the list.
+    /// Returns the next entry in the list, or `None` if this is the last entry.
     pub fn next(&self) -> Option<Entry<'a, T>> {
         let next = self.node.next.read()?;
         Some(Entry {
@@ -162,7 +163,12 @@ impl<'a, 'b, T> EntryImpl<'a, 'b, T> {
             // Only move the tail back if `next` is still the tail. A real CAS
             // is required: it must serialize with push_back's tail update, and
             // it must happen before the new `head.next` is published below.
-            let _ = self.list.tail.compare_and_swap(next, Some(self.node));
+            let _ = self.list.tail.compare_exchange(
+                Some(next),
+                Some(self.node.clone()),
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            );
             next.next.read()
         })
     }
@@ -186,7 +192,12 @@ impl<'a, 'b, T> EntryImpl<'a, 'b, T> {
 
             // Only move the tail back if `next` is still the tail; see
             // `remove_after`.
-            let _ = self.list.tail.compare_and_swap(next, Some(self.node));
+            let _ = self.list.tail.compare_exchange(
+                Some(next),
+                Some(self.node.clone()),
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            );
             next.next.read()
         });
 
@@ -202,9 +213,9 @@ impl<'a, 'b, T> EntryImpl<'a, 'b, T> {
 ///
 /// The `tail` cell only needs to be updated when the list becomes empty or
 /// stops being empty. Operations that touch both `head.next` and `tail`
-/// (`push_front`, `pop_front`, `remove_after_if`, and `push_back` on an
-/// empty list) must acquire `head.next` first and `tail` second; acquiring
-/// them in the opposite order can deadlock.
+/// (`push_front`, `pop_front`, `pop_front_if`, and `push_back` on an empty
+/// list) must acquire `head.next` first and `tail` second; acquiring them in
+/// the opposite order can deadlock.
 #[derive(Debug)]
 pub struct LinkedList<T> {
     head: Arc<Node<T>>,
@@ -251,7 +262,7 @@ impl<T> LinkedList<T> {
         node.data.is_some().then(|| Entry { list: self, node })
     }
 
-    /// Appends an element to the back of the list
+    /// Appends an element to the back of the list.
     pub fn push_back(&self, elt: T) -> Entry<'_, T> {
         let node = Arc::new(Node::new(elt));
 
@@ -323,7 +334,7 @@ impl<T> LinkedList<T> {
         EntryImpl::new(self, &self.head).insert_after(elt);
     }
 
-    /// Removes the first element of the list and returns it,
+    /// Removes the first element of the list and returns it.
     pub fn pop_front(&self) -> Option<Entry<'_, T>> {
         EntryImpl::new(self, &self.head)
             .remove_after()

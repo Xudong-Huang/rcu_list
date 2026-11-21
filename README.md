@@ -11,19 +11,23 @@ There are two types of linked list: `SingleLinkedList` and `DoubleLinkedList`.
 ## SingleLinkedList
 The `SingleLinkedList` supports the following operations:
 
+- `is_empty`: Check whether the list is empty.
 - `front`: Get the head entry of list.
 - `back`: Get the tail entry of list.
 - `push_front`: Insert a new element into the head of list.
 - `pop_front`: Remove the element from the head of list.
 - `push_back`: Insert a new element into the tail of list.
+- `pop_front_if`: Remove the element from the head of list if it satisfies a condition.
 - `iter`: Iterate over the list.
 
-each `Entry` that returned by insert operations could do the following operations:
+Each `Entry` supports the following operations:
 - `deref`: Read the value of the current element.
+- `next`: Get the next entry in the list, or `None` at the end.
 
 ## DoubleLinkedList
 The `DoubleLinkedList` supports the following operations:
 
+- `is_empty`: Check whether the list is empty.
 - `front`: Get the head entry of list.
 - `back`: Get the tail entry of list.
 - `push_front`: Insert a new element into the head of list.
@@ -32,7 +36,7 @@ The `DoubleLinkedList` supports the following operations:
 - `pop_back`: Remove the element from the tail of list.
 - `iter`: Iterate over the list.
 
-each `Entry` that returned by insert operations could do the following operations:
+Each `Entry` supports the following operations:
 - `remove`: Remove the current element from the list.
 - `replace`: Replace the current element with a new value.
 - `insert_after`: Insert an element after the entry.
@@ -42,9 +46,19 @@ each `Entry` that returned by insert operations could do the following operation
 - `deref`: Read the value of the current element.
 - `is_removed`: Check if the element is removed from the list.
 - `next`: Get the next entry in the list.
+- `into_static`: Convert the entry into a `StaticEntry`.
 
-Any write operations like insert/remove on a removed `Entry` would just fail.
-But it's safe to read(deref) the value of a removed `Entry`.
+Write operations on a removed `Entry` do not modify the list: `insert_after`,
+`insert_ahead` and `replace` return the passed-in value in `Err`, `remove` is a
+no-op, and `remove_after`/`remove_ahead` return `None`. It is still safe to read
+(`deref`) the value of a removed `Entry`.
+
+### `StaticEntry`
+A `StaticEntry` is an owned entry that does not borrow the list. It can outlive
+the `Entry` it was created from and be stored independently. It supports
+`remove`, `replace`, `insert_after`, `insert_ahead`, `is_removed` and `deref`.
+Since it is not tied to a list, it does not provide `next`, `remove_after` or
+`remove_ahead`.
 
 ### Notes on `DoubleLinkedList`
 1. `push_front` has better performance than `push_back`, because it doesn't need to lock the previous element.
