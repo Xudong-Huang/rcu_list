@@ -1157,4 +1157,118 @@ mod tests {
         // would hang forever
         assert!(list.head.try_lock().is_ok());
     }
+
+    #[test]
+    fn iter_walks_past_removed_node() {
+        let list = super::LinkedList::new();
+        list.push_back(1);
+        list.push_back(2);
+        list.push_back(3);
+
+        let mut iter = list.iter();
+        assert_eq!(*iter.next().unwrap(), 1);
+        // move the iterator onto node 2, then remove that node
+        assert_eq!(*iter.next().unwrap(), 2);
+        let removed = list.front().unwrap().remove_after().unwrap();
+        assert_eq!(*removed, 2);
+        assert!(removed.is_removed());
+
+        // the removed node keeps its `next`, so the iterator can continue
+        assert_eq!(*iter.next().unwrap(), 3);
+        assert!(iter.next().is_none());
+
+        // a fresh iterator only sees the live nodes
+        assert!(list.iter().map(|e| *e).eq([1, 3]));
+    }
+
+    #[test]
+    fn replace_removed_entry_fails() {
+        let list = super::LinkedList::new();
+        list.push_back(1);
+        let entry = list.push_back(2);
+        entry.remove();
+        assert_eq!(entry.replace(10), Err(10));
+
+        let static_entry = list.push_back(3).into_static();
+        static_entry.remove();
+        assert_eq!(static_entry.replace(11), Err(11));
+    }
+
+    #[test]
+    fn remove_around_removed_entry() {
+        let list = super::LinkedList::new();
+        list.push_back(1);
+        let entry = list.push_back(2);
+        list.push_back(3);
+        entry.remove();
+
+        assert!(entry.remove_after().is_none());
+        assert!(entry.remove_ahead().is_none());
+    }
+
+    #[test]
+    fn entry_traits() {
+        use alloc::format;
+        use core::cmp::Ordering;
+
+        let list = super::LinkedList::new();
+        list.push_back(10);
+        let a = list.front().unwrap();
+        let b = list.front().unwrap();
+
+        assert_eq!(format!("{:?}", a), "Entry(10)");
+        assert_eq!(a, b);
+        assert_eq!(a.cmp(&b), Ordering::Equal);
+        assert_eq!(*a.as_ref(), 10);
+        assert_eq!(*a.clone(), 10);
+
+        list.push_back(20);
+        let d = list.back().unwrap();
+
+        assert!(a < d);
+        assert!(a <= d);
+        assert!(d > a);
+        assert!(d >= a);
+        assert_ne!(a, d);
+        assert_eq!(a.partial_cmp(&d), Some(Ordering::Less));
+        assert_eq!(a.cmp(&d), Ordering::Less);
+    }
+
+    #[test]
+    fn static_entry_traits() {
+        use alloc::format;
+        use core::cmp::Ordering;
+
+        let list = super::LinkedList::new();
+        list.push_back(10);
+        let a = list.push_back(20).into_static();
+        let b = a.clone();
+
+        assert_eq!(format!("{:?}", a), "StaticEntry(20)");
+        assert_eq!(a, b);
+        assert_eq!(a.cmp(&b), Ordering::Equal);
+        assert_eq!(*a.as_ref(), 20);
+        assert_eq!(*b, 20);
+
+        let c = list.push_back(30).into_static();
+        assert_ne!(a, c);
+        assert!(a < c);
+        assert!(a <= c);
+        assert!(c > a);
+        assert!(c >= a);
+        assert_eq!(a.partial_cmp(&c), Some(Ordering::Less));
+        assert_eq!(c.cmp(&a), Ordering::Greater);
+
+        // From<Entry>
+        let from_entry = super::StaticEntry::from(list.back().unwrap());
+        assert_eq!(*from_entry, 30);
+        assert_eq!(from_entry, c);
+    }
+
+    #[test]
+    fn default_is_empty() {
+        let list: super::LinkedList<i32> = Default::default();
+        assert!(list.is_empty());
+        assert!(list.iter().next().is_none());
+    }
 }

@@ -510,4 +510,90 @@ mod tests {
         assert_eq!(*list.pop_front().unwrap(), 0);
         assert!(list.back().is_none());
     }
+
+    #[test]
+    fn entry_next() {
+        use alloc::vec;
+        use alloc::vec::Vec;
+
+        let list = super::LinkedList::new();
+        list.push_back(1);
+        list.push_back(2);
+        list.push_back(3);
+
+        // Walk the list through `Entry::next`; the chain must end after the
+        // last data node instead of exposing an invalid entry.
+        let mut values = Vec::new();
+        let mut entry = list.front();
+        while let Some(e) = entry {
+            values.push(*e);
+            entry = e.next();
+        }
+        assert_eq!(values, vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn iter_walks_past_removed_front() {
+        let list = super::LinkedList::new();
+        list.push_back(1);
+        list.push_back(2);
+        list.push_back(3);
+
+        let mut iter = list.iter();
+        assert_eq!(*iter.next().unwrap(), 1);
+
+        // The node the iterator is positioned on is removed, but a removed
+        // node keeps its `next`, so the iterator can still walk past it.
+        let removed = list.pop_front().unwrap();
+        assert_eq!(*removed, 1);
+        assert_eq!(*removed.next().unwrap(), 2);
+        assert_eq!(*iter.next().unwrap(), 2);
+        assert_eq!(*iter.next().unwrap(), 3);
+        assert!(iter.next().is_none());
+
+        // A fresh iterator only sees the live nodes.
+        assert!(list.iter().map(|e| *e).eq([2, 3]));
+    }
+
+    #[test]
+    fn pop_front_if_empty() {
+        let list: super::LinkedList<i32> = super::LinkedList::new();
+        assert!(list.pop_front_if(|_| true).is_none());
+        assert!(list.is_empty());
+    }
+
+    #[test]
+    fn entry_traits() {
+        use alloc::format;
+        use core::cmp::Ordering;
+
+        let list = super::LinkedList::new();
+        list.push_back(10);
+        let a = list.front().unwrap();
+        let b = list.front().unwrap();
+
+        assert_eq!(format!("{:?}", a), "Entry(10)");
+        assert_eq!(a, b);
+        assert_eq!(a.cmp(&b), Ordering::Equal);
+        assert_eq!(*a.as_ref(), 10);
+        assert_eq!(*a.clone(), 10);
+
+        list.push_back(20);
+        let d = list.back().unwrap();
+
+        assert!(a < d);
+        assert!(a <= d);
+        assert!(d > a);
+        assert!(d >= a);
+        assert_ne!(a, d);
+        assert_eq!(a.partial_cmp(&d), Some(Ordering::Less));
+        assert_eq!(a.cmp(&d), Ordering::Less);
+    }
+
+    #[test]
+    fn default_is_empty() {
+        let list: super::LinkedList<i32> = Default::default();
+        assert!(list.is_empty());
+        assert!(list.iter().next().is_none());
+    }
 }
