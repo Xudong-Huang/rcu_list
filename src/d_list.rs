@@ -26,6 +26,27 @@ impl<T> Default for Node<T> {
     }
 }
 
+impl<T> Drop for Node<T> {
+    fn drop(&mut self) {
+        // A removed node keeps its `next` pointer so live iterators can still
+        // walk past it. That means one held `Arc<Node>` can own a whole chain
+        // of removed nodes, and dropping it recursively would overflow the
+        // stack. Take ownership of each link and walk the chain iteratively.
+        let mut next = core::mem::replace(&mut self.next, RcuCell::none()).into_arc();
+        while let Some(node) = next {
+            match Arc::into_inner(node) {
+                // the next node is exclusively ours, detach its `next` and
+                // continue; the node itself is dropped with an empty `next`
+                Some(mut node) => {
+                    next = core::mem::replace(&mut node.next, RcuCell::none()).into_arc();
+                }
+                // the next node is still referenced elsewhere, stop here
+                None => break,
+            }
+        }
+    }
+}
+
 /// RAII guard for a locked `Node` that the caller owns. It is used when the
 /// locked node has to be returned from the locking function, where a borrowing
 /// guard cannot be used. Owning the node avoids cloning its `Arc`.
@@ -463,13 +484,6 @@ impl<T> Default for LinkedList<T> {
     }
 }
 
-impl<T> Drop for LinkedList<T> {
-    fn drop(&mut self) {
-        // avoid stack overflow
-        while self.pop_front().is_some() {}
-    }
-}
-
 impl<T> LinkedList<T> {
     /// Creates a new empty `LinkedList`.
     pub fn new() -> Self {
@@ -627,8 +641,8 @@ impl<'a, T> EntryImpl<'a, T> {
         let prev_guard = match self.node.lock_prev_node() {
             Ok(guard) => guard,
             Err(_) => {
-                let node = Arc::into_inner(new_node).unwrap();
-                return Err(node.data.unwrap());
+                let mut node = Arc::into_inner(new_node).unwrap();
+                return Err(node.data.take().unwrap());
             }
         };
         {
@@ -667,8 +681,8 @@ impl<'a, T> EntryImpl<'a, T> {
             Ok(node) => node,
             Err(_) => {
                 // current entry removed, can't insert
-                let n = Arc::into_inner(new_node).unwrap();
-                return Err(n.data.unwrap());
+                let mut n = Arc::into_inner(new_node).unwrap();
+                return Err(n.data.take().unwrap());
             }
         };
         {
@@ -735,8 +749,8 @@ impl<'a, T> EntryImpl<'a, T> {
         let prev_guard = match self.node.lock_prev_node() {
             Ok(guard) => guard,
             Err(_) => {
-                let node = Arc::into_inner(new_node).unwrap();
-                return Err(node.data.unwrap());
+                let mut node = Arc::into_inner(new_node).unwrap();
+                return Err(node.data.take().unwrap());
             }
         };
         {
@@ -965,6 +979,24 @@ mod tests {
     }
 
     #[test]
+    fn drop_long_removed_chain_is_iterative() {
+        let list = super::LinkedList::new();
+        const N: usize = 200_000;
+
+        for i in 0..N {
+            list.push_back(i);
+        }
+
+        // The held entry keeps the first removed node alive, and its `next`
+        // chain keeps every other removed node alive. Dropping it used to
+        // recurse once per element and overflow the stack.
+        let first = list.pop_front().unwrap();
+        while list.pop_front().is_some() {}
+
+        drop(first);
+    }
+
+    #[test]
     fn entry_replace() {
         let list = super::LinkedList::new();
         list.push_back(1);
@@ -1124,9 +1156,5 @@ mod tests {
         // the head node must have been unlocked while unwinding, or this
         // would hang forever
         assert!(list.head.try_lock().is_ok());
-
-        // unlink the removed node so dropping the list does not panic
-        list.head.next.write(list.tail.clone());
-        list.tail.set_prev_node(&list.head);
     }
 }

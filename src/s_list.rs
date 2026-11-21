@@ -34,6 +34,26 @@ impl<T> Node<T> {
     }
 }
 
+impl<T> Drop for Node<T> {
+    fn drop(&mut self) {
+        // Removed nodes keep their `next` pointer, so one held `Arc<Node>` can
+        // own a whole chain of removed nodes. Walk the chain iteratively
+        // instead of letting the recursive drop overflow the stack.
+        let mut next = core::mem::replace(&mut self.next, RcuCell::none()).into_arc();
+        while let Some(node) = next {
+            match Arc::into_inner(node) {
+                // the next node is exclusively ours, detach its `next` and
+                // continue; the node itself is dropped with an empty `next`
+                Some(mut node) => {
+                    next = core::mem::replace(&mut node.next, RcuCell::none()).into_arc();
+                }
+                // the next node is still referenced elsewhere, stop here
+                None => break,
+            }
+        }
+    }
+}
+
 /// An entry in a `LinkedList`. You can `deref` it to get the value.
 pub struct Entry<'a, T> {
     list: &'a LinkedList<T>,
@@ -225,13 +245,6 @@ pub struct LinkedList<T> {
 impl<T> Default for LinkedList<T> {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-impl<T> Drop for LinkedList<T> {
-    fn drop(&mut self) {
-        // avoid stack overflow
-        while self.pop_front().is_some() {}
     }
 }
 
@@ -452,6 +465,24 @@ mod tests {
         assert!(list.is_empty());
         assert!(list.back().is_none());
         assert!(list.front().is_none());
+    }
+
+    #[test]
+    fn drop_long_removed_chain_is_iterative() {
+        let list = super::LinkedList::new();
+        const N: usize = 200_000;
+
+        for i in 0..N {
+            list.push_back(i);
+        }
+
+        // The held entry keeps the first removed node alive, and its `next`
+        // chain keeps every other removed node alive. Dropping it used to
+        // recurse once per element and overflow the stack.
+        let first = list.pop_front().unwrap();
+        while list.pop_front().is_some() {}
+
+        drop(first);
     }
 
     #[test]

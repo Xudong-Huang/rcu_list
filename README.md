@@ -66,4 +66,3 @@ Since it is not tied to a list, it does not provide `next`, `remove_after` or
 3. `pop_back` could result more efficient memory recycle than `pop_front`, because it less likely hold the next element.
 4. `push_front` and `push_back` only need to lock one element.
 5. `pop_front` and `pop_back` need to lock two elements.
-6. Don't hold an `Entry` for a long time, the drop may recursively drop next elements and cause a stack overflow.
