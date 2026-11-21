@@ -63,6 +63,6 @@ Since it is not tied to a list, it does not provide `next`, `remove_after` or
 ### Notes on `DoubleLinkedList`
 1. `push_front` has better performance than `push_back`, because it doesn't need to lock the previous element.
 2. `pop_front` has better performance than `pop_back`, because it doesn't need to lock the previous element.
-3. `pop_back` could result more efficient memory recycle than `pop_front`, because it less likely hold the next element.
+3. `pop_back` can reclaim memory more eagerly than `pop_front`, because the removed node's `next` is the tail sentinel rather than the next element, so holding the popped entry does not keep other elements alive.
 4. `push_front` and `push_back` only need to lock one element.
 5. `pop_front` and `pop_back` need to lock two elements.
