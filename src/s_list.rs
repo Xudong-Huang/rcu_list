@@ -148,6 +148,27 @@ impl<'a, 'b, T> EntryImpl<'a, 'b, T> {
         Self { list, node }
     }
 
+    /// Move the tail back to `self.node` if `next` is still the tail.
+    ///
+    /// A real CAS is required: it must serialize with push_back's tail update,
+    /// and it must happen before the new `head.next` is published by the caller.
+    fn rollback_tail(&self, next: &Arc<Node<T>>) {
+        // Test the tail first: normally `next` is not the last node, and a
+        // failed exchange would clone `self.node` only to have it handed back
+        // and dropped. Only clone when the exchange can actually apply.
+        while self.list.tail.arc_eq(next) {
+            let exchanged = self.list.tail.compare_exchange(
+                Some(next),
+                Some(self.node.clone()),
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            );
+            if exchanged.is_ok() {
+                break;
+            }
+        }
+    }
+
     fn insert_after(&self, elt: T) {
         let new_node = Arc::new(Node {
             next: RcuCell::none(),
@@ -180,15 +201,9 @@ impl<'a, 'b, T> EntryImpl<'a, 'b, T> {
                 Some(next) => next,
                 None => return None,
             };
-            // Only move the tail back if `next` is still the tail. A real CAS
-            // is required: it must serialize with push_back's tail update, and
-            // it must happen before the new `head.next` is published below.
-            let _ = self.list.tail.compare_exchange(
-                Some(next),
-                Some(self.node.clone()),
-                Ordering::AcqRel,
-                Ordering::Acquire,
-            );
+            // Only move the tail back if `next` is still the tail, and do it
+            // before the new `head.next` is published below.
+            self.rollback_tail(next);
             next.next.read()
         })
     }
@@ -211,13 +226,8 @@ impl<'a, 'b, T> EntryImpl<'a, 'b, T> {
             }
 
             // Only move the tail back if `next` is still the tail; see
-            // `remove_after`.
-            let _ = self.list.tail.compare_exchange(
-                Some(next),
-                Some(self.node.clone()),
-                Ordering::AcqRel,
-                Ordering::Acquire,
-            );
+            // `rollback_tail`.
+            self.rollback_tail(next);
             next.next.read()
         });
 
