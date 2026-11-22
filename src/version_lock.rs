@@ -1,4 +1,36 @@
+use core::cell::Cell;
 use core::sync::atomic::{AtomicUsize, Ordering};
+
+/// Exponential backoff for the retry loops: every `spin` call executes an
+/// increasing number of `spin_loop` hints, up to 64, so two spinning threads
+/// stop fighting over the cache line.
+pub(crate) struct Backoff {
+    step: Cell<u32>,
+}
+
+impl Backoff {
+    #[inline]
+    pub(crate) const fn new() -> Self {
+        Backoff { step: Cell::new(0) }
+    }
+
+    #[inline]
+    pub(crate) fn spin(&self) {
+        const MAX_STEP: u32 = 6;
+        let step = self.step.get().min(MAX_STEP);
+        for _ in 0..1 << step {
+            core::hint::spin_loop();
+        }
+        if step < MAX_STEP {
+            self.step.set(step + 1);
+        }
+    }
+
+    #[inline]
+    pub(crate) fn reset(&self) {
+        self.step.set(0);
+    }
+}
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum LockErr {
@@ -69,7 +101,7 @@ impl VersionLock {
     /// valid version is returned in 0, 4, 8, 12...
     #[inline]
     pub fn lock(&self) -> Result<usize, LockErr> {
-        let backoff = crossbeam_utils::Backoff::new();
+        let backoff = Backoff::new();
 
         let version = self.version.load(Ordering::Relaxed);
         if version & 1 == 1 {

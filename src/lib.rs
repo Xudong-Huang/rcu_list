@@ -9,3 +9,6 @@ mod version_lock;
 
 pub use d_list::LinkedList as DoubleLinkedList;
 pub use s_list::LinkedList as SingleLinkedList;
+
+// re-export rcu_cell
+pub use rcu_cell;

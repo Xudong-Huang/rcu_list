@@ -4,7 +4,7 @@ use rcu_cell::{RcuCell, RcuWeak};
 use core::ops::Deref;
 use core::{cmp, fmt};
 
-use crate::version_lock::{LockErr, VersionLock, VersionLockGuard};
+use crate::version_lock::{Backoff, LockErr, VersionLock, VersionLockGuard};
 
 #[derive(Debug)]
 struct Node<T> {
@@ -143,7 +143,7 @@ impl<T> Node<T> {
     }
 
     fn lock_prev_node(self: &Arc<Self>) -> Result<OwnedNodeGuard<T>, LockErr> {
-        let backoff = crossbeam_utils::Backoff::new();
+        let backoff = Backoff::new();
         loop {
             let prev_node = match self.prev_node() {
                 // something wrong, like the prev node is dropped,
