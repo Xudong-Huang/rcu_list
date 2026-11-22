@@ -62,7 +62,10 @@ impl<T> OwnedNodeGuard<T> {
         let guard = OwnedNodeGuard { node };
         // the invariant check reads `next` and upgrades `prev`, which costs a
         // few atomic operations on every lock, so only check in debug builds
-        debug_assert!(guard.node.next_node().prev_eq(&guard.node));
+        debug_assert!(guard
+            .node
+            .next
+            .with(|next| next.is_some_and(|next| next.prev_eq(&guard.node))));
         Ok(guard)
     }
 
@@ -632,7 +635,6 @@ impl<'a, T> EntryImpl<'a, T> {
     /// Replace the entry with new value,
     fn replace(&self, elt: T) -> Result<Arc<Node<T>>, T> {
         let new_node = Arc::new(Node::new(elt));
-        new_node.next.write(self.node.clone());
 
         // move the drop out of locks
         let old_node_prev;
@@ -648,11 +650,12 @@ impl<'a, T> EntryImpl<'a, T> {
         {
             new_node.set_prev_node(prev_guard.node());
             let new_guard = new_node.try_lock().unwrap();
-            let (_next_node, old_guard) = self.node.lock().unwrap();
+            let (next_node, old_guard) = self.node.lock().unwrap();
             {
-                let next_node = self.node.next_node();
-                old_node_prev = next_node.set_prev_node(&new_node);
+                // Set `new_node.next` before `next_node.prev` points at the new
+                // node; see `insert_after`.
                 new_node.next.write(next_node.clone());
+                old_node_prev = next_node.set_prev_node(&new_node);
                 old_prev_next = prev_guard.node().next.write(new_node.clone());
             }
             old_guard.remove();
@@ -688,6 +691,10 @@ impl<'a, T> EntryImpl<'a, T> {
         {
             // new_node.try_lock().unwrap();
             {
+                // Set `new_node.next` before `next_node.prev` points at the new
+                // node: once it does, a concurrent `lock_prev_node` may follow
+                // the weak pointer and expect the new node's links to be
+                // consistent.
                 new_node.next.write(next_node.clone());
                 old_next_prev = next_node.set_prev_node(&new_node);
                 old_head_next = self.node.next.write(new_node.clone());
@@ -722,7 +729,9 @@ impl<'a, T> EntryImpl<'a, T> {
             let (next_node, curr_guard) = curr_node.lock().unwrap();
             {
                 old_next_prev = next_node.set_prev_node(self.node);
-                old_head_next = self.node.next.write(next_node.clone());
+                // `next_node` is the only owned ref, move it into head.next
+                // instead of cloning it and dropping the original
+                old_head_next = self.node.next.write(next_node);
             }
             curr_guard.remove();
             curr_node.clear_prev_node();

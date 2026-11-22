@@ -212,6 +212,18 @@ impl<'a, 'b, T> EntryImpl<'a, 'b, T> {
     where
         F: Fn(&T) -> bool,
     {
+        // Check the condition on a borrowed node first: an `update` that finds
+        // it unmet has to clone the node just to write it back unchanged. The
+        // result is only used to fail fast; if it does match, the `update`
+        // below rechecks it, so a concurrent change is still handled.
+        let matched = self
+            .node
+            .next
+            .with(|next| next.is_some_and(|next| condition(next.data.as_ref().unwrap())));
+        if !matched {
+            return None;
+        }
+
         let mut condition_met = false;
         let ret = self.node.next.update(|next| {
             let next = match next {
@@ -292,29 +304,36 @@ impl<T> LinkedList<T> {
         // Fast path: if the list is not empty, appending only needs the tail
         // lock. The pushed node is linked after `old_tail` and becomes the new
         // tail.
-        let mut tail_is_head = false;
-        let new_next = node.clone();
-        let new_tail = node.clone();
-        self.tail.update(|tail| {
-            // tail is never none
-            let old_tail = tail.unwrap();
-            if Arc::ptr_eq(old_tail, &self.head) {
-                // The tail still points at the head sentinel: either the list
-                // is empty, or a concurrent pop_front has already moved the
-                // tail back but has not published the empty head.next yet.
-                // This needs both the head.next and the tail locks. Do not
-                // take head.next while holding tail here, that would invert
-                // the lock order used by push_front/pop_front and could
-                // deadlock. Leave the tail unchanged and use the slow path.
-                tail_is_head = true;
-                Some(old_tail.clone())
-            } else {
-                old_tail.next.write(new_next);
-                Some(new_tail)
+        //
+        // Probe the tail with a plain load first. If it is the head sentinel
+        // the list is empty, and the update below would only write the same
+        // tail back before taking the slow path anyway.
+        if !self.tail.arc_eq(&self.head) {
+            let mut tail_is_head = false;
+            let new_next = node.clone();
+            let new_tail = node.clone();
+            self.tail.update(|tail| {
+                // tail is never none
+                let old_tail = tail.unwrap();
+                if Arc::ptr_eq(old_tail, &self.head) {
+                    // The tail still points at the head sentinel: either the
+                    // list is empty, or a concurrent pop_front has already
+                    // moved the tail back but has not published the empty
+                    // head.next yet. This needs both the head.next and the tail
+                    // locks. Do not take head.next while holding tail here,
+                    // that would invert the lock order used by
+                    // push_front/pop_front and could deadlock. Leave the tail
+                    // unchanged and use the slow path.
+                    tail_is_head = true;
+                    Some(old_tail.clone())
+                } else {
+                    old_tail.next.write(new_next);
+                    Some(new_tail)
+                }
+            });
+            if !tail_is_head {
+                return Entry { list: self, node };
             }
-        });
-        if !tail_is_head {
-            return Entry { list: self, node };
         }
 
         // Slow path for an empty list: acquire head.next first, then tail,
